@@ -7,19 +7,20 @@ import JavaScriptCore
 /// musicSearch, getMusicUrl, getLyric }` 导出。运行时向 JS 注入一个同步的
 /// `request(url, options)` 全局函数，供音源脚本拉取各平台的公开接口。
 ///
-/// 所有 JS 调用都派发到专用串行队列，避免阻塞调用方线程（尤其是主线程）。
+/// 所有 JS 调用都派发到主线程执行：JavaScriptCore 要求同一 JSContext 在单一线程
+/// 使用，且 Promise 的回调依赖该线程的 RunLoop；主线程天然满足条件。代价是网络请求
+/// 会在主线程同步等待（MVP 限制），后续可改为真正的异步 request 桥接以消除卡顿。
 final class SourceRuntime {
 
     private var _context: JSContext?
-    private let jsQueue = DispatchQueue(label: "com.example.luoxuemusic.js")
 
     // MARK: - 公开接口
 
     func search(source: MusicSource, query: String, page: Int = 1) async -> [Song]? {
         await withCheckedContinuation { cont in
-            jsQueue.async {
+            self.runOnMainAndWait {
                 let songs = self.callListMethod(source: source, method: "musicSearch",
-                                                args: [query, page, 30], platform: source.platform)
+                                               args: [query, page, 30], platform: source.platform)
                 cont.resume(returning: songs)
             }
         }
@@ -27,7 +28,7 @@ final class SourceRuntime {
 
     func getUrl(source: MusicSource, song: Song) async -> String? {
         await withCheckedContinuation { cont in
-            jsQueue.async {
+            self.runOnMainAndWait {
                 let url = self.callContentMethod(source: source, method: "getMusicUrl", song: song, key: "url")
                 cont.resume(returning: url)
             }
@@ -36,14 +37,24 @@ final class SourceRuntime {
 
     func getLyric(source: MusicSource, song: Song) async -> String? {
         await withCheckedContinuation { cont in
-            jsQueue.async {
+            self.runOnMainAndWait {
                 let lyric = self.callContentMethod(source: source, method: "getLyric", song: song, key: "lyric")
                 cont.resume(returning: lyric)
             }
         }
     }
 
-    // MARK: - JS 上下文
+    // MARK: - 线程调度（确保 JS 始终在主线程执行）
+
+    private func runOnMainAndWait(_ block: @escaping () -> Void) {
+        if Thread.isMainThread {
+            block()
+        } else {
+            DispatchQueue.main.sync(execute: block)
+        }
+    }
+
+    // MARK: - JS 上下文（必须在主线程调用）
 
     private func context() -> JSContext {
         if let existing = _context { return existing }
@@ -76,8 +87,8 @@ final class SourceRuntime {
         let ctx = context()
         guard let exports = prepare(ctx, source: source) else { return nil }
         guard let fn = exports.objectForKeyedSubscript(method), !fn.isUndefined, !fn.isNull else { return nil }
-        let promise = fn.call(withArguments: args)
-        guard let raw = awaitPromise(promise) else { return nil }
+        let result = fn.call(withArguments: args)
+        guard let raw = awaitPromise(result) else { return nil }
         return parseSongs(raw, platform: platform)
     }
 
@@ -85,8 +96,8 @@ final class SourceRuntime {
         let ctx = context()
         guard let exports = prepare(ctx, source: source) else { return nil }
         guard let fn = exports.objectForKeyedSubscript(method), !fn.isUndefined, !fn.isNull else { return nil }
-        let promise = fn.call(withArguments: [song.toSourceInfo()])
-        guard let raw = awaitPromise(promise) else { return nil }
+        let result = fn.call(withArguments: [song.toSourceInfo()])
+        guard let raw = awaitPromise(result) else { return nil }
         if let dict = raw as? [String: Any] {
             return dict[key] as? String
         }
@@ -118,15 +129,15 @@ final class SourceRuntime {
                     album: album, duration: duration, picUrl: pic, lrcUrl: lrc)
     }
 
-    // MARK: - Promise 等待（非阻塞：在 JSContext 内部队列的回调中离开 group）
+    // MARK: - Promise 等待（主线程 RunLoop 驱动，避免死锁）
 
     private func awaitPromise(_ promise: JSValue?) -> Any? {
-        guard let promise = promise, promise.isPromise else {
+        guard let promise = promise, promise.forProperty("then")?.isObject == true else {
             return promise?.toObject()
         }
+        var result: Any?
         let group = DispatchGroup()
         group.enter()
-        var result: Any?
         let onFulfilled: @convention(block) (JSValue) -> Void = { value in
             result = value.toObject()
             group.leave()
@@ -135,11 +146,14 @@ final class SourceRuntime {
             group.leave()
         }
         promise.invokeMethod("then", withArguments: [onFulfilled, onRejected])
-        _ = group.wait(timeout: .now() + 25)
+        // 在主线程 RunLoop 上轮询，直到 Promise 回调触发（microtask 由 RunLoop 处理）。
+        while group.wait(timeout: .now() + 0.1) != .success {
+            RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
+        }
         return result
     }
 
-    // MARK: - 网络
+    // MARK: - 网络（MVP：主线程同步请求；后续改为异步 request 桥接）
 
     private func syncRequest(url: String, options: [String: Any]) -> String? {
         guard let u = URL(string: url) else { return nil }
@@ -174,19 +188,11 @@ private extension Song {
     /// 传给音源脚本的歌曲信息（洛雪常用字段名尽量覆盖）。
     func toSourceInfo() -> [String: Any] {
         return [
-            "songmid": songId,
-            "songid": songId,
-            "id": songId,
-            "songname": title,
-            "name": title,
-            "title": title,
-            "singer": artist,
-            "artist": artist,
-            "albumname": album,
-            "album": album,
-            "source": source,
-            "pic": picUrl,
-            "interval": duration
+            "songmid": songId, "songid": songId, "id": songId,
+            "songname": title, "name": title, "title": title,
+            "singer": artist, "artist": artist,
+            "albumname": album, "album": album,
+            "source": source, "pic": picUrl, "interval": duration
         ]
     }
 }
