@@ -71,12 +71,28 @@ struct AddSourceSheet: View {
     var body: some View {
         NavigationStack {
             Form {
+                Section {
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("从「文件」导入 .js 音源", systemImage: "doc.badge.plus")
+                    }
+                } footer: {
+                    Text("支持从 iPhone「文件」App 选择音源脚本（.js / .txt 均可）。")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
                 Section("基本信息") {
                     TextField("音源名称", text: $name)
                     TextField("platform 标识", text: $platform)
                     TextField("作者", text: $author)
                 }
                 Section("洛雪音源脚本") {
+                    if script.isEmpty {
+                        Text("点上方「从文件导入」，或在此直接粘贴脚本")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
+                    }
                     TextEditor(text: $script)
                         .frame(minHeight: 200)
                         .font(.system(.caption, design: .monospaced))
@@ -90,13 +106,6 @@ struct AddSourceSheet: View {
             }
             .navigationTitle("导入音源")
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        showFileImporter = true
-                    } label: {
-                        Label("导入文件", systemImage: "doc.badge.plus")
-                    }
-                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
@@ -106,7 +115,7 @@ struct AddSourceSheet: View {
             }
             .fileImporter(
                 isPresented: $showFileImporter,
-                allowedContentTypes: [UTType(filenameExtension: "js") ?? .plainText, .plainText],
+                allowedContentTypes: [.data, .plainText],
                 allowsMultipleSelection: false
             ) { result in
                 switch result {
