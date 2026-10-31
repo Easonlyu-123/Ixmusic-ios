@@ -215,7 +215,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
     }
 
     @MainActor
-    final class Coordinator: NSObject, UIDocumentPickerViewControllerDelegate {
+    final class Coordinator: NSObject, UIDocumentPickerDelegate {
         let onPick: (String, String) -> Void
         let onCancel: () -> Void
 
