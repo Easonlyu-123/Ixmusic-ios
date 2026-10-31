@@ -4,8 +4,9 @@ import UniformTypeIdentifiers
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showAddSheet = false
-    // 文件导入放在外层视图，避免 .fileImporter 嵌在 .sheet 内导致选中回调不触发。
-    @State private var showFileImporter = false
+    // 文件选择器用系统原生 UIDocumentPickerViewController（外层 fullScreenCover 触发），
+    // 避免 SwiftUI .fileImporter 嵌在 sheet 内时「双重 present」导致弹不出 / 选中无响应。
+    @State private var showFilePicker = false
     @State private var draftScript = ""
     @State private var draftName = ""
     @State private var importError: String?
@@ -55,38 +56,48 @@ struct SourcesView: View {
                     }
                 }
             }
+            .overlay {
+                if store.sources.isEmpty {
+                    VStack(spacing: 12) {
+                        Image(systemName: "square.and.arrow.down")
+                            .font(.largeTitle)
+                            .foregroundStyle(.secondary)
+                        Text("还没有音源，点右上角 + 添加")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
         }
         .sheet(isPresented: $showAddSheet) {
             AddSourceSheet(
                 script: $draftScript,
                 name: $draftName,
                 importError: $importError,
-                onPickFile: { showFileImporter = true }
+                onPickFile: {
+                    // 关键：先关闭 import 弹窗，再（延迟）打开文件选择器，
+                    // 避免 sheet 与文件选择器同时 present。
+                    showAddSheet = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
+                        showFilePicker = true
+                    }
+                }
             )
         }
-        .fileImporter(
-            isPresented: $showFileImporter,
-            allowedContentTypes: [.data, .plainText],
-            allowsMultipleSelection: false
-        ) { result in
-            switch result {
-            case .success(let urls):
-                guard let url = urls.first else { return }
-                let granted = url.startAccessingSecurityScopedResource()
-                defer { if granted { url.stopAccessingSecurityScopedResource() } }
-                do {
-                    let content = try String(contentsOf: url, encoding: .utf8)
+        .fullScreenCover(isPresented: $showFilePicker) {
+            DocumentPicker(
+                onPick: { content, filename in
                     draftScript = content
-                    if draftName.isEmpty {
-                        draftName = url.deletingPathExtension().lastPathComponent
-                    }
+                    if draftName.isEmpty { draftName = filename }
                     importError = nil
-                } catch {
-                    importError = "读取文件失败：\(error.localizedDescription)"
+                    showFilePicker = false
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
+                        showAddSheet = true
+                    }
+                },
+                onCancel: {
+                    showFilePicker = false
                 }
-            case .failure(let error):
-                importError = "选择文件失败：\(error.localizedDescription)"
-            }
+            )
         }
     }
 }
@@ -180,5 +191,53 @@ struct AddSourceSheet: View {
         store.addSource(source)
         resetDrafts()
         dismiss()
+    }
+}
+
+/// 系统原生文档选择器包装。直接 present UIDocumentPickerViewController，
+/// 不依赖 SwiftUI .fileImporter，规避 sheet 嵌套冲突。
+struct DocumentPicker: UIViewControllerRepresentable {
+    let onPick: (String, String) -> Void
+    let onCancel: () -> Void
+
+    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .plainText])
+        picker.allowsMultipleSelection = false
+        picker.delegate = context.coordinator
+        return picker
+    }
+
+    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(onPick: onPick, onCancel: onCancel)
+    }
+
+    final class Coordinator: NSObject, UIDocumentPickerViewControllerDelegate {
+        let onPick: (String, String) -> Void
+        let onCancel: () -> Void
+
+        init(onPick: @escaping (String, String) -> Void, onCancel: @escaping () -> Void) {
+            self.onPick = onPick
+            self.onCancel = onCancel
+        }
+
+        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+            guard let url = urls.first else { return }
+            let secured = url.startAccessingSecurityScopedResource()
+            defer { if secured { url.stopAccessingSecurityScopedResource() } }
+            do {
+                let content = try String(contentsOf: url, encoding: .utf8)
+                let name = url.deletingPathExtension().lastPathComponent
+                onPick(content, name)
+            } catch {
+                // 读取失败时不回填，由调用方决定后续处理
+                onCancel()
+            }
+        }
+
+        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+            onCancel()
+        }
     }
 }
