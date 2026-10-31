@@ -195,51 +195,61 @@ struct AddSourceSheet: View {
     }
 }
 
-/// 系统原生文档选择器包装。直接 present UIDocumentPickerViewController，
-/// 不依赖 SwiftUI .fileImporter，规避 sheet 嵌套冲突。
+/// 用一个真正的 UIKit 容器 VC 来 present 系统文档选择器。
+/// 直接把 UIDocumentPickerViewController 交给 SwiftUI 的 sheet/fullScreenCover 承载时，
+/// 选中回调经常不触发；由独立 UIKit VC 负责 present/dismiss 则稳定可靠。
+@MainActor
+final class DocumentPickerHostController: UIViewController {
+    var onPick: ((String, String) -> Void)?
+    var onCancel: (() -> Void)?
+    private var hasPresented = false
+
+    override func viewDidAppear(_ animated: Bool) {
+        super.viewDidAppear(animated)
+        guard !hasPresented else { return }
+        hasPresented = true
+        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .plainText])
+        picker.allowsMultipleSelection = false
+        picker.delegate = self
+        present(picker, animated: true)
+    }
+}
+
+extension DocumentPickerHostController: UIDocumentPickerDelegate {
+    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
+        guard let url = urls.first else { return }
+        let secured = url.startAccessingSecurityScopedResource()
+        defer { if secured { url.stopAccessingSecurityScopedResource() } }
+        do {
+            let content = try String(contentsOf: url, encoding: .utf8)
+            let name = url.deletingPathExtension().lastPathComponent
+            controller.dismiss(animated: false) { [weak self] in
+                self?.onPick?(content, name)
+            }
+        } catch {
+            controller.dismiss(animated: false) { [weak self] in
+                self?.onCancel?()
+            }
+        }
+    }
+
+    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
+        controller.dismiss(animated: false) { [weak self] in
+            self?.onCancel?()
+        }
+    }
+}
+
 struct DocumentPicker: UIViewControllerRepresentable {
     let onPick: (String, String) -> Void
     let onCancel: () -> Void
 
-    func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .plainText])
-        picker.allowsMultipleSelection = false
-        picker.delegate = context.coordinator
-        return picker
+    func makeUIViewController(context: Context) -> DocumentPickerHostController {
+        let vc = DocumentPickerHostController()
+        vc.onPick = onPick
+        vc.onCancel = onCancel
+        return vc
     }
 
-    func updateUIViewController(_ uiViewController: UIDocumentPickerViewController, context: Context) {}
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(onPick: onPick, onCancel: onCancel)
-    }
-
-    @MainActor
-    final class Coordinator: NSObject, UIDocumentPickerDelegate {
-        let onPick: (String, String) -> Void
-        let onCancel: () -> Void
-
-        init(onPick: @escaping (String, String) -> Void, onCancel: @escaping () -> Void) {
-            self.onPick = onPick
-            self.onCancel = onCancel
-        }
-
-        func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-            guard let url = urls.first else { return }
-            let secured = url.startAccessingSecurityScopedResource()
-            defer { if secured { url.stopAccessingSecurityScopedResource() } }
-            do {
-                let content = try String(contentsOf: url, encoding: .utf8)
-                let name = url.deletingPathExtension().lastPathComponent
-                onPick(content, name)
-            } catch {
-                // 读取失败时不回填，由调用方决定后续处理
-                onCancel()
-            }
-        }
-
-        func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-            onCancel()
-        }
-    }
+    func updateUIViewController(_ uiViewController: DocumentPickerHostController, context: Context) {}
 }
