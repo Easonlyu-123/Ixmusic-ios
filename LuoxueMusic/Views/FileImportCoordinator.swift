@@ -43,8 +43,10 @@ final class FileImportCoordinator: NSObject {
             ?? windowScenes.first
         guard let scene = activeScene else { return nil }
         let window = scene.windows.first { $0.isKeyWindow } ?? scene.windows.first
-        guard let root = window?.rootViewController else { return nil }
-        return root.topMostPresented
+        // 必须 present 在【根 VC】上：若叠在 SwiftUI 的 sheet（UISheetPresentationController）
+        // 之上，底层面板会拦截“点文件”的手势，导致选不中。先关掉面板、再从根 VC 弹，
+        // 选择器才是真正的顶层，点选才会触发回调。
+        return window?.rootViewController
     }
 
     private func cleanup() {
@@ -80,17 +82,5 @@ extension FileImportCoordinator: UIDocumentPickerDelegate {
         controller.dismiss(animated: false)
         onCancel?()
         cleanup()
-    }
-}
-
-private extension UIViewController {
-    /// 沿 presentedViewController 链找到真正在最上层的 VC。
-    var topMostPresented: UIViewController {
-        var vc = self
-        while let presented = vc.presentedViewController,
-              !(presented is UIAlertController) {
-            vc = presented
-        }
-        return vc
     }
 }

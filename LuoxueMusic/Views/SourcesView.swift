@@ -68,15 +68,21 @@ struct SourcesView: View {
                 script: $draftScript,
                 name: $draftName,
                 onPickFile: {
-                    // 直接在最上层 VC 上弹出系统文件选择器（由 FileImportCoordinator 命令式 present），
-                    // 选中的脚本内容会回填到下方仍在显示的导入面板里。
-                    FileImportCoordinator.shared.present(
-                        onPick: { content, filename in
-                            draftScript = content
-                            if draftName.isEmpty { draftName = filename }
-                        },
-                        onCancel: {}
-                    )
+                    // 先关掉导入面板，再（延迟等面板动画结束）从【根 VC】弹出系统文件选择器。
+                    // 不能在面板之上再弹——那样点文件会被底层面板拦截、选不中。
+                    // 选完/取消后再把面板重新打开并回填内容。
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                        FileImportCoordinator.shared.present(
+                            onPick: { content, filename in
+                                draftScript = content
+                                if draftName.isEmpty { draftName = filename }
+                                showAddSheet = true
+                            },
+                            onCancel: {
+                                showAddSheet = true
+                            }
+                        )
+                    }
                 }
             )
         }
@@ -99,7 +105,10 @@ struct AddSourceSheet: View {
         NavigationStack {
             Form {
                 Section {
-                    Button(action: onPickFile) {
+                    Button(action: {
+                        dismiss()
+                        onPickFile()
+                    }) {
                         Label("从「文件」导入 .js 音源", systemImage: "doc.badge.plus")
                     }
                 } footer: {
