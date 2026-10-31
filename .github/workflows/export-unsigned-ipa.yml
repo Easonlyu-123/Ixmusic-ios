@@ -45,6 +45,17 @@ jobs:
       - name: Install XcodeGen
         run: brew install xcodegen
 
+      - name: Select latest available Xcode (争取 iOS 27 SDK / 更好的液态玻璃)
+        run: |
+          latest=$(ls -d /Applications/Xcode*.app 2>/dev/null | sort -V | tail -1)
+          if [ -n "$latest" ]; then
+            echo "使用 Xcode: $latest"
+            sudo xcode-select -s "$latest"
+          else
+            echo "未找到额外 Xcode，沿用 runner 默认"
+          fi
+          xcodebuild -version
+
       - name: Generate Xcode project
         run: xcodegen generate
 

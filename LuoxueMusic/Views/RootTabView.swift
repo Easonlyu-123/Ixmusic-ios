@@ -5,15 +5,18 @@ struct RootTabView: View {
     @State private var showNowPlaying = false
 
     var body: some View {
-        TabView {
-            SearchView()
-                .tabItem { Label("搜索", systemImage: "magnifyingglass") }
+        ZStack {
+            backgroundView
+            TabView {
+                SearchView()
+                    .tabItem { Label("搜索", systemImage: "magnifyingglass") }
 
-            LibraryView()
-                .tabItem { Label("媒体库", systemImage: "music.note.list") }
+                LibraryView()
+                    .tabItem { Label("媒体库", systemImage: "music.note.list") }
 
-            SourcesView()
-                .tabItem { Label("音源", systemImage: "server.rack") }
+                SourcesView()
+                    .tabItem { Label("音源", systemImage: "server.rack") }
+            }
         }
         .overlay(alignment: .bottom) {
             if store.currentSong != nil {
@@ -32,6 +35,26 @@ struct RootTabView: View {
                 NowPlayingView(song: song)
             }
         }
+    }
+
+    /// 深色 + 彩色光晕背景：液态玻璃需要背后有内容才能折射出质感。
+    private var backgroundView: some View {
+        ZStack {
+            Color(red: 0.04, green: 0.04, blue: 0.08)
+            RadialGradient(
+                colors: [Color.purple.opacity(0.45), .clear],
+                center: .topLeading, startRadius: 50, endRadius: 480
+            )
+            RadialGradient(
+                colors: [Color.blue.opacity(0.40), .clear],
+                center: .bottomTrailing, startRadius: 50, endRadius: 520
+            )
+            RadialGradient(
+                colors: [Color.pink.opacity(0.28), .clear],
+                center: .init(x: 0.7, y: 0.35), startRadius: 40, endRadius: 360
+            )
+        }
+        .ignoresSafeArea()
     }
 }
 
