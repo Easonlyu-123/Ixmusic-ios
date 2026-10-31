@@ -1,16 +1,10 @@
 import SwiftUI
-import UIKit
-import UniformTypeIdentifiers
 
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showAddSheet = false
-    // 文件选择器用系统原生 UIDocumentPickerViewController（外层 fullScreenCover 触发），
-    // 避免 SwiftUI .fileImporter 嵌在 sheet 内时「双重 present」导致弹不出 / 选中无响应。
-    @State private var showFilePicker = false
     @State private var draftScript = ""
     @State private var draftName = ""
-    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -73,30 +67,16 @@ struct SourcesView: View {
             AddSourceSheet(
                 script: $draftScript,
                 name: $draftName,
-                importError: $importError,
                 onPickFile: {
-                    // 关键：先关闭 import 弹窗，再（延迟）打开文件选择器，
-                    // 避免 sheet 与文件选择器同时 present。
-                    showAddSheet = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-                        showFilePicker = true
-                    }
-                }
-            )
-        }
-        .fullScreenCover(isPresented: $showFilePicker) {
-            DocumentPicker(
-                onPick: { content, filename in
-                    draftScript = content
-                    if draftName.isEmpty { draftName = filename }
-                    importError = nil
-                    showFilePicker = false
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.3) {
-                        showAddSheet = true
-                    }
-                },
-                onCancel: {
-                    showFilePicker = false
+                    // 直接在最上层 VC 上弹出系统文件选择器（由 FileImportCoordinator 命令式 present），
+                    // 选中的脚本内容会回填到下方仍在显示的导入面板里。
+                    FileImportCoordinator.shared.present(
+                        onPick: { content, filename in
+                            draftScript = content
+                            if draftName.isEmpty { draftName = filename }
+                        },
+                        onCancel: {}
+                    )
                 }
             )
         }
@@ -109,11 +89,11 @@ struct AddSourceSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var script: String
     @Binding var name: String
-    @Binding var importError: String?
     var onPickFile: () -> Void
 
     @State private var platform = ""
     @State private var author = ""
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -193,63 +173,4 @@ struct AddSourceSheet: View {
         resetDrafts()
         dismiss()
     }
-}
-
-/// 用一个真正的 UIKit 容器 VC 来 present 系统文档选择器。
-/// 直接把 UIDocumentPickerViewController 交给 SwiftUI 的 sheet/fullScreenCover 承载时，
-/// 选中回调经常不触发；由独立 UIKit VC 负责 present/dismiss 则稳定可靠。
-@MainActor
-final class DocumentPickerHostController: UIViewController {
-    var onPick: ((String, String) -> Void)?
-    var onCancel: (() -> Void)?
-    private var hasPresented = false
-
-    override func viewDidAppear(_ animated: Bool) {
-        super.viewDidAppear(animated)
-        guard !hasPresented else { return }
-        hasPresented = true
-        let picker = UIDocumentPickerViewController(forOpeningContentTypes: [.data, .plainText])
-        picker.allowsMultipleSelection = false
-        picker.delegate = self
-        present(picker, animated: true)
-    }
-}
-
-extension DocumentPickerHostController: UIDocumentPickerDelegate {
-    func documentPicker(_ controller: UIDocumentPickerViewController, didPickDocumentsAt urls: [URL]) {
-        guard let url = urls.first else { return }
-        let secured = url.startAccessingSecurityScopedResource()
-        defer { if secured { url.stopAccessingSecurityScopedResource() } }
-        do {
-            let content = try String(contentsOf: url, encoding: .utf8)
-            let name = url.deletingPathExtension().lastPathComponent
-            controller.dismiss(animated: false) { [weak self] in
-                self?.onPick?(content, name)
-            }
-        } catch {
-            controller.dismiss(animated: false) { [weak self] in
-                self?.onCancel?()
-            }
-        }
-    }
-
-    func documentPickerWasCancelled(_ controller: UIDocumentPickerViewController) {
-        controller.dismiss(animated: false) { [weak self] in
-            self?.onCancel?()
-        }
-    }
-}
-
-struct DocumentPicker: UIViewControllerRepresentable {
-    let onPick: (String, String) -> Void
-    let onCancel: () -> Void
-
-    func makeUIViewController(context: Context) -> DocumentPickerHostController {
-        let vc = DocumentPickerHostController()
-        vc.onPick = onPick
-        vc.onCancel = onCancel
-        return vc
-    }
-
-    func updateUIViewController(_ uiViewController: DocumentPickerHostController, context: Context) {}
 }

@@ -13,6 +13,12 @@ import JavaScriptCore
 final class SourceRuntime {
 
     private var _context: JSContext?
+    // 每段脚本只编译/执行一次并缓存其导出的音源对象。
+    // 关键：洛雪音源脚本普遍用 `const source = {...}; module.exports = source;`
+    // 声明在全局作用域。若每次搜索都直接 eval 整段，第二次执行会因“标识符已声明”
+    // 抛异常，导致真实音源在首次搜索后全部失效。故用 IIFE 把脚本包进独立函数作用域，
+    // 既能隔离不同音源之间的顶层声明冲突，又能安全复用。
+    private var exportsCache: [String: JSValue] = [:]
 
     // MARK: - 公开接口
 
@@ -77,10 +83,24 @@ final class SourceRuntime {
     // MARK: - 同步调用
 
     private func prepare(_ ctx: JSContext, source: MusicSource) -> JSValue? {
-        // 每次重置 module / exports，再执行脚本，保证不同音源相互隔离。
-        ctx.evaluateScript("var module = { exports: {} }; var exports = module.exports;")
-        ctx.evaluateScript(source.script)
-        return ctx.objectForKeyedSubscript("module")?.objectForKeyedSubscript("exports")
+        if let cached = exportsCache[source.script] {
+            return cached
+        }
+        // 用 IIFE 把脚本包进独立函数作用域执行，避免顶层 `const source` 在多次/多音源间冲突。
+        let wrapper = """
+        (function() {
+          var module = { exports: {} };
+          var exports = module.exports;
+          \(source.script)
+          return module.exports;
+        })()
+        """
+        guard let exports = ctx.evaluateScript(wrapper),
+              !exports.isUndefined, !exports.isNull else {
+            return nil
+        }
+        exportsCache[source.script] = exports
+        return exports
     }
 
     private func callListMethod(source: MusicSource, method: String, args: [Any], platform: String) -> [Song]? {
