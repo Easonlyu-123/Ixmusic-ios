@@ -4,6 +4,11 @@ import UniformTypeIdentifiers
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showAddSheet = false
+    // 文件导入放在外层视图，避免 .fileImporter 嵌在 .sheet 内导致选中回调不触发。
+    @State private var showFileImporter = false
+    @State private var draftScript = ""
+    @State private var draftName = ""
+    @State private var importError: String?
 
     var body: some View {
         NavigationStack {
@@ -52,7 +57,36 @@ struct SourcesView: View {
             }
         }
         .sheet(isPresented: $showAddSheet) {
-            AddSourceSheet()
+            AddSourceSheet(
+                script: $draftScript,
+                name: $draftName,
+                importError: $importError,
+                onPickFile: { showFileImporter = true }
+            )
+        }
+        .fileImporter(
+            isPresented: $showFileImporter,
+            allowedContentTypes: [.data, .plainText],
+            allowsMultipleSelection: false
+        ) { result in
+            switch result {
+            case .success(let urls):
+                guard let url = urls.first else { return }
+                let granted = url.startAccessingSecurityScopedResource()
+                defer { if granted { url.stopAccessingSecurityScopedResource() } }
+                do {
+                    let content = try String(contentsOf: url, encoding: .utf8)
+                    draftScript = content
+                    if draftName.isEmpty {
+                        draftName = url.deletingPathExtension().lastPathComponent
+                    }
+                    importError = nil
+                } catch {
+                    importError = "读取文件失败：\(error.localizedDescription)"
+                }
+            case .failure(let error):
+                importError = "选择文件失败：\(error.localizedDescription)"
+            }
         }
     }
 }
@@ -61,20 +95,19 @@ struct SourcesView: View {
 struct AddSourceSheet: View {
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @State private var name = ""
+    @Binding var script: String
+    @Binding var name: String
+    @Binding var importError: String?
+    var onPickFile: () -> Void
+
     @State private var platform = ""
     @State private var author = ""
-    @State private var script = ""
-    @State private var errorMessage: String?
-    @State private var showFileImporter = false
 
     var body: some View {
         NavigationStack {
             Form {
                 Section {
-                    Button {
-                        showFileImporter = true
-                    } label: {
+                    Button(action: onPickFile) {
                         Label("从「文件」导入 .js 音源", systemImage: "doc.badge.plus")
                     }
                 } footer: {
@@ -97,9 +130,9 @@ struct AddSourceSheet: View {
                         .frame(minHeight: 200)
                         .font(.system(.caption, design: .monospaced))
                 }
-                if let errorMessage {
+                if let importError {
                     Section {
-                        Text(errorMessage)
+                        Text(importError)
                             .foregroundStyle(.red)
                     }
                 }
@@ -107,48 +140,33 @@ struct AddSourceSheet: View {
             .navigationTitle("导入音源")
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { dismiss() }
+                    Button("取消") {
+                        resetDrafts()
+                        dismiss()
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
-                }
-            }
-            .fileImporter(
-                isPresented: $showFileImporter,
-                allowedContentTypes: [.data, .plainText],
-                allowsMultipleSelection: false
-            ) { result in
-                switch result {
-                case .success(let urls):
-                    guard let url = urls.first else { return }
-                    let granted = url.startAccessingSecurityScopedResource()
-                    defer { if granted { url.stopAccessingSecurityScopedResource() } }
-                    do {
-                        let content = try String(contentsOf: url, encoding: .utf8)
-                        script = content
-                        if name.isEmpty {
-                            name = url.deletingPathExtension().lastPathComponent
-                        }
-                        errorMessage = nil
-                    } catch {
-                        errorMessage = "读取文件失败：\(error.localizedDescription)"
-                    }
-                case .failure(let error):
-                    errorMessage = "选择文件失败：\(error.localizedDescription)"
                 }
             }
         }
         .presentationDetents([.large, .medium])
     }
 
+    private func resetDrafts() {
+        script = ""
+        name = ""
+        importError = nil
+    }
+
     private func save() {
         let trimmed = script.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
-            errorMessage = "请粘贴洛雪音源脚本"
+            importError = "请粘贴或导入洛雪音源脚本"
             return
         }
         guard trimmed.contains("module.exports") else {
-            errorMessage = "脚本需以 module.exports 导出音源对象"
+            importError = "脚本需以 module.exports 导出音源对象"
             return
         }
         let source = MusicSource(
@@ -160,6 +178,7 @@ struct AddSourceSheet: View {
             enabled: true
         )
         store.addSource(source)
+        resetDrafts()
         dismiss()
     }
 }
