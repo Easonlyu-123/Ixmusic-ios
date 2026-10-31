@@ -1,4 +1,5 @@
 import SwiftUI
+import UniformTypeIdentifiers
 
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
@@ -65,6 +66,7 @@ struct AddSourceSheet: View {
     @State private var author = ""
     @State private var script = ""
     @State private var errorMessage: String?
+    @State private var showFileImporter = false
 
     var body: some View {
         NavigationStack {
@@ -88,11 +90,42 @@ struct AddSourceSheet: View {
             }
             .navigationTitle("导入音源")
             .toolbar {
+                ToolbarItem(placement: .navigationBarLeading) {
+                    Button {
+                        showFileImporter = true
+                    } label: {
+                        Label("导入文件", systemImage: "doc.badge.plus")
+                    }
+                }
                 ToolbarItem(placement: .cancellationAction) {
                     Button("取消") { dismiss() }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("保存") { save() }
+                }
+            }
+            .fileImporter(
+                isPresented: $showFileImporter,
+                allowedContentTypes: [UTType(filenameExtension: "js") ?? .plainText, .plainText],
+                allowsMultipleSelection: false
+            ) { result in
+                switch result {
+                case .success(let urls):
+                    guard let url = urls.first else { return }
+                    let granted = url.startAccessingSecurityScopedResource()
+                    defer { if granted { url.stopAccessingSecurityScopedResource() } }
+                    do {
+                        let content = try String(contentsOf: url, encoding: .utf8)
+                        script = content
+                        if name.isEmpty {
+                            name = url.deletingPathExtension().lastPathComponent
+                        }
+                        errorMessage = nil
+                    } catch {
+                        errorMessage = "读取文件失败：\(error.localizedDescription)"
+                    }
+                case .failure(let error):
+                    errorMessage = "选择文件失败：\(error.localizedDescription)"
                 }
             }
         }
