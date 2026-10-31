@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 import UniformTypeIdentifiers
 
 struct SourcesView: View {
@@ -213,6 +214,7 @@ struct DocumentPicker: UIViewControllerRepresentable {
         Coordinator(onPick: onPick, onCancel: onCancel)
     }
 
+    @MainActor
     final class Coordinator: NSObject, UIDocumentPickerViewControllerDelegate {
         let onPick: (String, String) -> Void
         let onCancel: () -> Void
