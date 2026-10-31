@@ -1,0 +1,25 @@
+# ios-ci-workflows 的 App 配置：所有工作流都从这里读设置，入口文件里只剩 uses: 和 secrets:。
+# 只写你要改的键，其余用默认值。完整说明见 https://github.com/wenjinliuu/ios-ci-workflows/blob/main/docs/config.md
+
+# 工程（必填：project、scheme、bundle_id）
+workdir: .                          # .xcodeproj 所在目录，相对仓库根
+project: LuoxueMusic.xcodeproj
+scheme: LuoxueMusic
+bundle_id: com.example.luoxuemusic
+display_name: 洛雪音乐              # 发版时核对 CFBundleDisplayName，也用作验收 Issue 标题
+sync_command: 'true'                # 没有 SVG 图标图层同步，填 'true' 跳过
+generate_command: xcodegen generate # 用 XcodeGen 生成 .xcodeproj；工作流会自动安装固定版本的 XcodeGen
+icon_path: ''                       # 用 App Icon 工作流时再填 .icon 包路径
+
+# 工具链：显式固定，快照参考图只在同一 Xcode、机型、iOS 版本上可比
+toolchain:
+  xcode: '26.6'
+  simulator: iPhone 17 Pro
+  ios: '26.4'
+
+build_test:
+  commit_recorded_snapshots: false  # 录制快照后由 CI 提交回分支；本仓库暂未用快照测试，保持 false
+
+testflight:
+  entitlement_mode: none            # 本 App 无 iCloud/推送等特殊能力，不嵌入 entitlements
+  acceptance_issue: true            # 上传成功后开“发版验收”Issue

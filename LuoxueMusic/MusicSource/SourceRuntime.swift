@@ -1,0 +1,192 @@
+import Foundation
+import JavaScriptCore
+
+/// 通过 JavaScriptCore 执行洛雪格式（lx-music-source）的 JS 音源脚本。
+///
+/// 音源格式保持不变：脚本以 `module.exports = { name, version, platform, author,
+/// musicSearch, getMusicUrl, getLyric }` 导出。运行时向 JS 注入一个同步的
+/// `request(url, options)` 全局函数，供音源脚本拉取各平台的公开接口。
+///
+/// 所有 JS 调用都派发到专用串行队列，避免阻塞调用方线程（尤其是主线程）。
+final class SourceRuntime {
+
+    private var _context: JSContext?
+    private let jsQueue = DispatchQueue(label: "com.example.luoxuemusic.js")
+
+    // MARK: - 公开接口
+
+    func search(source: MusicSource, query: String, page: Int = 1) async -> [Song]? {
+        await withCheckedContinuation { cont in
+            jsQueue.async {
+                let songs = self.callListMethod(source: source, method: "musicSearch",
+                                                args: [query, page, 30], platform: source.platform)
+                cont.resume(returning: songs)
+            }
+        }
+    }
+
+    func getUrl(source: MusicSource, song: Song) async -> String? {
+        await withCheckedContinuation { cont in
+            jsQueue.async {
+                let url = self.callContentMethod(source: source, method: "getMusicUrl", song: song, key: "url")
+                cont.resume(returning: url)
+            }
+        }
+    }
+
+    func getLyric(source: MusicSource, song: Song) async -> String? {
+        await withCheckedContinuation { cont in
+            jsQueue.async {
+                let lyric = self.callContentMethod(source: source, method: "getLyric", song: song, key: "lyric")
+                cont.resume(returning: lyric)
+            }
+        }
+    }
+
+    // MARK: - JS 上下文
+
+    private func context() -> JSContext {
+        if let existing = _context { return existing }
+        let ctx = JSContext()!
+        ctx.exceptionHandler = { _, exception in
+            if let e = exception {
+                NSLog("LuoxueMusic JS exception: \(e.toString() ?? "unknown")")
+            }
+        }
+        // 注入同步网络请求：洛雪音源脚本内部通过全局 request 拉取平台接口。
+        let requestBlock: @convention(block) (String, JSValue) -> String? = { [weak self] url, optionsValue in
+            let options = (optionsValue.toDictionary() as? [String: Any]) ?? [:]
+            return self?.syncRequest(url: url, options: options)
+        }
+        ctx.setObject(requestBlock, forKeyedSubscript: "request" as NSString)
+        _context = ctx
+        return ctx
+    }
+
+    // MARK: - 同步调用
+
+    private func prepare(_ ctx: JSContext, source: MusicSource) -> JSValue? {
+        // 每次重置 module / exports，再执行脚本，保证不同音源相互隔离。
+        ctx.evaluateScript("var module = { exports: {} }; var exports = module.exports;")
+        ctx.evaluateScript(source.script)
+        return ctx.objectForKeyedSubscript("module")?.objectForKeyedSubscript("exports")
+    }
+
+    private func callListMethod(source: MusicSource, method: String, args: [Any], platform: String) -> [Song]? {
+        let ctx = context()
+        guard let exports = prepare(ctx, source: source) else { return nil }
+        guard let fn = exports.objectForKeyedSubscript(method), !fn.isUndefined, !fn.isNull else { return nil }
+        let promise = fn.call(withArguments: args)
+        guard let raw = awaitPromise(promise) else { return nil }
+        return parseSongs(raw, platform: platform)
+    }
+
+    private func callContentMethod(source: MusicSource, method: String, song: Song, key: String) -> String? {
+        let ctx = context()
+        guard let exports = prepare(ctx, source: source) else { return nil }
+        guard let fn = exports.objectForKeyedSubscript(method), !fn.isUndefined, !fn.isNull else { return nil }
+        let promise = fn.call(withArguments: [song.toSourceInfo()])
+        guard let raw = awaitPromise(promise) else { return nil }
+        if let dict = raw as? [String: Any] {
+            return dict[key] as? String
+        }
+        return raw as? String
+    }
+
+    // MARK: - 结果解析
+
+    private func parseSongs(_ raw: Any?, platform: String) -> [Song]? {
+        if let arr = raw as? [[String: Any]] {
+            return arr.compactMap { song(from: $0, platform: platform) }
+        }
+        if let dict = raw as? [String: Any], let list = dict["list"] as? [[String: Any]] {
+            return list.compactMap { song(from: $0, platform: platform) }
+        }
+        return nil
+    }
+
+    private func song(from dict: [String: Any], platform: String) -> Song? {
+        let title = (dict["songname"] as? String) ?? (dict["name"] as? String) ?? (dict["title"] as? String) ?? ""
+        let artist = (dict["singer"] as? String) ?? (dict["artist"] as? String) ?? ""
+        let album = (dict["albumname"] as? String) ?? (dict["album"] as? String) ?? ""
+        let songId = String(describing: dict["songmid"] ?? dict["id"] ?? dict["songid"] ?? UUID().uuidString)
+        let duration = (dict["interval"] as? Int) ?? (dict["duration"] as? Int) ?? 0
+        let pic = (dict["pic"] as? String) ?? (dict["picUrl"] as? String) ?? (dict["image"] as? String) ?? ""
+        let lrc = (dict["lrcUrl"] as? String) ?? (dict["lyricUrl"] as? String) ?? ""
+        guard !title.isEmpty else { return nil }
+        return Song(source: platform, songId: songId, title: title, artist: artist,
+                    album: album, duration: duration, picUrl: pic, lrcUrl: lrc)
+    }
+
+    // MARK: - Promise 等待（非阻塞：在 JSContext 内部队列的回调中离开 group）
+
+    private func awaitPromise(_ promise: JSValue?) -> Any? {
+        guard let promise = promise, promise.isPromise else {
+            return promise?.toObject()
+        }
+        let group = DispatchGroup()
+        group.enter()
+        var result: Any?
+        let onFulfilled: @convention(block) (JSValue) -> Void = { value in
+            result = value.toObject()
+            group.leave()
+        }
+        let onRejected: @convention(block) (JSValue) -> Void = { _ in
+            group.leave()
+        }
+        promise.invokeMethod("then", withArguments: [onFulfilled, onRejected])
+        _ = group.wait(timeout: .now() + 25)
+        return result
+    }
+
+    // MARK: - 网络
+
+    private func syncRequest(url: String, options: [String: Any]) -> String? {
+        guard let u = URL(string: url) else { return nil }
+        var request = URLRequest(url: u)
+        request.timeoutInterval = 15
+        if let method = options["method"] as? String, !method.isEmpty {
+            request.httpMethod = method.uppercased()
+        } else {
+            request.httpMethod = "GET"
+        }
+        if let headers = options["headers"] as? [String: String] {
+            for (k, v) in headers { request.setValue(v, forHTTPHeaderField: k) }
+        }
+        if let body = options["body"] as? String, let data = body.data(using: .utf8) {
+            request.httpBody = data
+        }
+        var result: String?
+        let semaphore = DispatchSemaphore(value: 0)
+        let task = URLSession.shared.dataTask(with: request) { data, _, _ in
+            if let data = data, let str = String(data: data, encoding: .utf8) {
+                result = str
+            }
+            semaphore.signal()
+        }
+        task.resume()
+        _ = semaphore.wait(timeout: .now() + 20)
+        return result
+    }
+}
+
+private extension Song {
+    /// 传给音源脚本的歌曲信息（洛雪常用字段名尽量覆盖）。
+    func toSourceInfo() -> [String: Any] {
+        return [
+            "songmid": songId,
+            "songid": songId,
+            "id": songId,
+            "songname": title,
+            "name": title,
+            "title": title,
+            "singer": artist,
+            "artist": artist,
+            "albumname": album,
+            "album": album,
+            "source": source,
+            "pic": picUrl,
+            "interval": duration
+        ]
+    }
+}
