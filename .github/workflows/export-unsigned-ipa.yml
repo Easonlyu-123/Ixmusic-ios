@@ -1,0 +1,84 @@
+# 导出【未签名】IPA —— 不需要任何 Apple 账号 / 证书
+#
+# 用途：在 GitHub 托管的 macOS runner 上用 Xcode 26 编译，产出“未签名 IPA”，
+#       作为 Actions Artifact 上传。下载后用「全能签 / AltStore / Sideloadly」等工具
+#       以你自己的 Apple ID（免费个人签，7 天有效）或导入的证书重签即可安装。
+#
+# 触发方式：
+#   1) 手动：仓库 → Actions → Export Unsigned IPA → Run workflow
+#   2) 打标签：push 一个 ipa-* 开头的 tag（如 ipa-v1.0.0）
+#
+# 注意：iOS 不允许运行完全无签名的 App，所以拿到的 IPA 必须由全能签
+#       再签名一次才能装——这是 iOS 机制，不是多余的步骤。
+
+name: Export Unsigned IPA
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_name:
+        description: 'IPA 命名后缀（如 dev / beta）'
+        required: false
+        default: 'dev'
+  push:
+    tags:
+      - 'ipa-*'
+
+permissions:
+  contents: read
+
+jobs:
+  unsigned-ipa:
+    name: Build unsigned IPA (no Apple account)
+    runs-on: macos-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show runner Xcode / macOS
+        run: |
+          sw_vers
+          echo "--- 已安装的 Xcode ---"
+          ls /Applications | grep -i xcode || true
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        run: xcodegen generate
+
+      - name: Archive without signing
+        run: |
+          set -o pipefail
+          xcodebuild archive \
+            -project LuoxueMusic.xcodeproj \
+            -scheme LuoxueMusic \
+            -configuration Release \
+            -archivePath "$PWD/build/LuoxueMusic.xcarchive" \
+            CODE_SIGN_IDENTITY="" \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGN_STYLE=Manual \
+            AD_HOC_CODE_SIGNING_ALLOWED=YES
+
+      - name: Package unsigned IPA
+        run: |
+          APP="build/LuoxueMusic.xcarchive/Products/Applications/LuoxueMusic.app"
+          if [ ! -d "$APP" ]; then
+            echo "::error::找不到编译产物 $APP，archive 可能失败，请查看上方日志"
+            exit 1
+          fi
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -r "LuoxueMusic-unsigned.ipa" Payload
+          echo "--- IPA 产物 ---"
+          ls -lh LuoxueMusic-unsigned.ipa
+
+      - name: Upload IPA artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LuoxueMusic-unsigned-ipa
+          path: build/LuoxueMusic-unsigned.ipa
+          retention-days: 30

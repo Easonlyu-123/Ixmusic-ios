@@ -28,8 +28,9 @@
 ├── project.yml                 # XcodeGen 工程定义
 ├── .ios-ci.yml                 # ios-ci-workflows 的 App 配置（工程名/签名/工具链）
 ├── .github/workflows/
-│   ├── build-test.yml          # 入口：编译 + 测试（0 个 secrets）
-│   └── testflight.yml          # 入口：签名打包上传 TestFlight（需 4 个 Apple secrets）
+│   ├── build-test.yml          # 入口：编译 + 测试（0 个 secrets，验证工程能编过）
+│   ├── export-unsigned-ipa.yml # 入口：导出未签名 IPA（无 Apple 账号，供全能签重签）
+│   └── testflight.yml          # 入口：官方签名上传 TestFlight（需 4 个 Apple secrets，可选）
 ├── AGENTS.md                   # 给 AI 的协作规则
 ├── release-checklist.md        # TestFlight 发版验收清单
 ├── LuoxueMusic/
@@ -66,13 +67,24 @@
 
 ## 3. 怎么得到 IPA
 
-工作流分两档，按你有没有 Apple 开发者账号选择：
+工作流分三档，按你的需求选择：
 
-### 方案 A：只想验证能编译（无需 Apple 账号）
-直接 push 即可。**Build & Test 不需要任何签名**就能编译 + 测试。它验证的是「代码能编过、测试能跑过」，但**不导出 IPA 文件**。
+### 方案 A：只想验证能编译（无需 Apple 账号，推荐先跑）
+直接 push 到 `main` 或开 PR。**Build & Test 不需要任何签名**就能编译 + 测试，验证「代码能编过、测试能跑过」，但**不导出 IPA 文件**。建议先跑这一档确认工程在 Xcode 26 上能编译。
 
-### 方案 B：真正产出可安装的签名 IPA（需要 Apple 开发者账号）
-TestFlight 工作流负责签名打包并上传 TestFlight，最终产出可安装的 IPA：
+### 方案 B：未签名 IPA + 全能签安装（无需 Apple 账号）✅ 推荐
+如果你只要一个能在自己手机上装的 IPA，用「全能签 / AltStore / Sideloadly」以**自己的 Apple ID（免费个人签，7 天有效）或导入的证书**重签安装——那么不需要任何 Apple 开发者账号：
+
+1. 在仓库 **Actions → Export Unsigned IPA → Run workflow**（手动触发），或打一个 `ipa-*` 开头的 tag（`git tag ipa-v1.0.0 && git push --tags`）。
+2. CI 在 macOS runner 上用 Xcode 26 编译，产出**未签名 IPA** 并作为 Artifact 上传。
+3. 到本次运行的 **Artifacts** 里下载 `LuoxueMusic-unsigned.ipa`。
+4. 用**全能签**导入这个 IPA，用自己的 Apple ID 或个人证书**重签**后安装到手机。
+
+> ⚠️ iOS 不允许运行完全无签名的 App，「未签名 IPA」指的是**没有用正式证书签名、留给全能签重签**的包。拿到后必须再签一次才能装——这是 iOS 机制，不是多余步骤。
+> 重签时全能签可顺手把 Bundle ID / 名字改成你自己的；占位值 `com.example.luoxuemusic` 也能直接签。
+
+### 方案 C：官方签名 IPA 并上架 TestFlight（需要 Apple 开发者账号，可选）
+如果以后想走官方签名 / 上架，TestFlight 工作流负责签名打包并上传 TestFlight：
 
 1. 在 [Apple Developer](https://developer.apple.com) 注册 **$99/年** 的开发者账号。
 2. 在 **App Store Connect** 新建一个 App（Bundle ID 与 `.ios-ci.yml` 的 `bundle_id` 一致）。
@@ -86,8 +98,7 @@ TestFlight 工作流负责签名打包并上传 TestFlight，最终产出可安�
    | `APP_STORE_CONNECT_PRIVATE_KEY` | 下载的 `.p8` 文件全文（含首尾 `-----BEGIN/END-----` 两行） |
 
    > 不需要手动导出 `.p12` 或描述文件——CI 用 App Store Connect API Key + 自动签名，由 Xcode 云端管理证书。
-4. **打一个 `v*` 标签**（`git tag v1.0.0 && git push --tags`），或手动在 Actions → TestFlight 运行。CI 会：核对 Apple 注册 → 跑完整测试 → 自动签名打包 → 上传 TestFlight → 开一个「发版验收」Issue。上传完成后即可在 TestFlight 里安装 IPA。
-5. 想先**不签名不上传**只验证打包流程：手动运行 TestFlight 并勾选 `dry_run`。
+4. **打一个 `v*` 标签**（`git tag v1.0.0 && git push --tags`），或手动运行 Actions → TestFlight。CI 会：核对 Apple 注册 → 跑完整测试 → 自动签名打包 → 上传 TestFlight → 开一个「发版验收」Issue。上传完成后即可在 TestFlight 里安装 IPA。
 
 ---
 
