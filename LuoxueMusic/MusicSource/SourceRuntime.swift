@@ -369,8 +369,8 @@ final class SourceRuntime {
         if let result, result.forProperty("then")?.isObject == true {
             return awaitPromise(result)
         }
-        // 方式二：处理器直接返回非 Promise 值（部分老脚本）。
-        if let result, !result.isUndefined, !result.isNull, result.isObject {
+        // 方式二：处理器直接返回非 Promise 值（部分老脚本；官方契约 musicUrl/pic 直接返回 URL 字符串）。
+        if let result, !result.isUndefined, !result.isNull {
             return result.toObject()
         }
         // 方式三：等待 sendResponse 回调（非官方但兼容的写法）。动作未处理时会在此短等待后返回 nil。
