@@ -126,7 +126,7 @@ final class SourceRuntime {
         ctx.setObject(timerClearBlock, forKeyedSubscript: "__lx_timer_clear" as NSString)
 
         let md5Block: @convention(block) (JSValue) -> String = { data in
-            let bytes = Self.bytesOf(data)
+            let bytes = Self.bytesOf(data).map { UInt8($0 & 0xFF) }
             var digest = [UInt8](repeating: 0, count: Int(CC_MD5_DIGEST_LENGTH))
             _ = bytes.withUnsafeBufferPointer { ptr in
                 CC_MD5(ptr.baseAddress, CC_LONG(bytes.count), &digest)
@@ -134,7 +134,7 @@ final class SourceRuntime {
             return digest.map { String(format: "%02x", $0) }.joined()
         }
         let sha1Block: @convention(block) (JSValue) -> String = { data in
-            let bytes = Self.bytesOf(data)
+            let bytes = Self.bytesOf(data).map { UInt8($0 & 0xFF) }
             var digest = [UInt8](repeating: 0, count: Int(CC_SHA1_DIGEST_LENGTH))
             _ = bytes.withUnsafeBufferPointer { ptr in
                 CC_SHA1(ptr.baseAddress, CC_LONG(bytes.count), &digest)
