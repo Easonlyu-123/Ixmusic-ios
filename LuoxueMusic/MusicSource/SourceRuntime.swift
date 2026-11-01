@@ -734,17 +734,18 @@ final class SourceRuntime {
     /// zlib 压缩/解压（COMPRESSION_ZLIB）。
     private static func zlibOp(bytes: [Int], compress: Bool) -> [Int] {
         let input = bytes.map { UInt8($0 & 0xFF) }
+        guard !input.isEmpty else { return [] }
         let capacity = compress ? input.count * 2 + 1024 : input.count * 4 + 1024
         var out = [UInt8](repeating: 0, count: max(capacity, 64))
         let written = input.withUnsafeBytes { inPtr in
             out.withUnsafeMutableBytes { outPtr in
                 if compress {
-                    return compression_encode_buffer(outPtr.baseAddress?.bindMemory(to: UInt8.self), out.count,
-                                                    inPtr.baseAddress?.bindMemory(to: UInt8.self), input.count,
+                    return compression_encode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self), out.count,
+                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 } else {
-                    return compression_decode_buffer(outPtr.baseAddress?.bindMemory(to: UInt8.self), out.count,
-                                                    inPtr.baseAddress?.bindMemory(to: UInt8.self), input.count,
+                    return compression_decode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self), out.count,
+                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 }
             }
