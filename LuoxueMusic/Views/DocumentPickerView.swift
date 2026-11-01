@@ -16,8 +16,10 @@ struct DocumentPickerView: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIDocumentPickerViewController {
         // asCopy: true —— 系统会把选中的文件复制进 App 沙盒，回调的 URL 指向沙盒副本，
         // 直接 String(contentsOf:) 读取即可，绕开 security-scoped 资源访问的坑。
+        // .data 是 public.data 超类，.js / .txt 等均为其子类型，会正常显示且可选中；
+        // 不写 UTType.javascript（部分 SDK 无此静态成员，会编译失败）。
         let picker = UIDocumentPickerViewController(
-            forOpeningContentTypes: [.data, .plainText, .javascript],
+            forOpeningContentTypes: [.data, .plainText],
             asCopy: true
         )
         picker.allowsMultipleSelection = false
