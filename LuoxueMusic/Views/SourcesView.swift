@@ -9,6 +9,21 @@ struct SourcesView: View {
     var body: some View {
         NavigationStack {
             List {
+                Section {
+                    HStack(spacing: 10) {
+                        Image(systemName: "sparkles")
+                            .foregroundStyle(.tint)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("洛雪音乐 · iOS")
+                                .font(.subheadline.weight(.semibold))
+                            Text("当前版本 v\(AppInfo.appVersion)（构建 \(AppInfo.buildNumber)）")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                        Spacer()
+                    }
+                    .padding(.vertical, 2)
+                }
                 ForEach(store.sources) { src in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {

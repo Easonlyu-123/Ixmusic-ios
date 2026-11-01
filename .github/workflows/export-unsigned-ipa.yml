@@ -74,12 +74,22 @@ jobs:
             AD_HOC_CODE_SIGNING_ALLOWED=YES
 
       - name: Package unsigned IPA
+        id: pkg
         run: |
           APP="build/LuoxueMusic.xcarchive/Products/Applications/LuoxueMusic.app"
           if [ ! -d "$APP" ]; then
             echo "::error::找不到编译产物 $APP，archive 可能失败，请查看上方日志"
             exit 1
           fi
+          # 版本号：tag 形如 ipa-v1.0.3 -> 1.0.3；手动触发则用输入或 dev
+          if [[ "${GITHUB_REF}" == refs/tags/ipa-* ]]; then
+            VERSION="${GITHUB_REF_NAME#ipa-v}"
+          else
+            VERSION="${{ github.event.inputs.build_name || 'dev' }}"
+          fi
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          # 在 IPA 内写入版本信息，方便解压后核对“这是哪版”
+          echo "LuoxueMusic v${VERSION} (build ${GITHUB_RUN_NUMBER})" > "$APP/version.txt"
           mkdir -p build/Payload
           cp -R "$APP" build/Payload/
           cd build
@@ -90,6 +100,6 @@ jobs:
       - name: Upload IPA artifact
         uses: actions/upload-artifact@v4
         with:
-          name: LuoxueMusic-unsigned-ipa
+          name: LuoxueMusic-unsigned-ipa-v${{ steps.pkg.outputs.version }}
           path: build/LuoxueMusic-unsigned.ipa
           retention-days: 30
