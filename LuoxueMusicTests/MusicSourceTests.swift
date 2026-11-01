@@ -219,4 +219,44 @@ struct MusicSourceRuntimeTests {
         #expect(BuiltInPlatforms.parseNeteaseSongs(Data("not json".utf8)).isEmpty)
         #expect(BuiltInPlatforms.parseKuwoSongs(Data("{}".utf8)).isEmpty)
     }
+
+    @Test("取链失败时透传脚本报错原因")
+    func getUrlReportsScriptError() async {
+        let script = """
+        const { EVENT_NAMES, on, send } = globalThis.lx;
+        on(EVENT_NAMES.request, ({ source, action, info }) => {
+          if (action === 'musicUrl') return Promise.reject(new Error('vip locked'));
+          return Promise.resolve('');
+        });
+        send(EVENT_NAMES.inited, { sources: { wy: { name: 'err', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] } } });
+        """
+        let source = MusicSource(name: "报错音源", version: "1.0.0", platform: "custom",
+                                 author: "t", script: script, enabled: true)
+        let runtime = SourceRuntime()
+        let song = Song(source: "wy", songId: "1", title: "t", artist: "a",
+                        album: "al", duration: 1, picUrl: "", lrcUrl: "")
+        let (url, error) = await runtime.getUrlWithReport(source: source, song: song)
+        #expect(url == nil)
+        #expect(error?.contains("vip locked") == true)
+    }
+
+    @Test("按 inited 声明的 musicUrl 动作取链成功")
+    func getUrlUsesDeclaredAction() async {
+        let script = """
+        const { EVENT_NAMES, on, send } = globalThis.lx;
+        on(EVENT_NAMES.request, ({ source, action, info }) => {
+          if (action === 'musicUrl') return Promise.resolve('https://example.com/' + info.musicInfo.songmid + '.mp3');
+          return Promise.reject(new Error('unsupported action ' + action));
+        });
+        send(EVENT_NAMES.inited, { sources: { wy: { name: 'x', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] } } });
+        """
+        let source = MusicSource(name: "声明动作音源", version: "1.0.0", platform: "custom",
+                                 author: "t", script: script, enabled: true)
+        let runtime = SourceRuntime()
+        let song = Song(source: "wy", songId: "42", title: "t", artist: "a",
+                        album: "al", duration: 1, picUrl: "", lrcUrl: "")
+        let (url, error) = await runtime.getUrlWithReport(source: source, song: song)
+        #expect(url == "https://example.com/42.mp3")
+        #expect(error == nil)
+    }
 }

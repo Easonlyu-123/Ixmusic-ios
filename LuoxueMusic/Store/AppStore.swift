@@ -72,22 +72,20 @@ final class AppStore: ObservableObject {
         }
         await MainActor.run { self.isSearching = true }
 
-        // 洛雪官方模式：搜索由应用**自带平台音源**完成（网易云/酷我）。
+        // 洛雪官方模式：搜索由应用**自带平台音源**完成（网易云/酷我），结果先上屏。
         async let builtInWy = BuiltInPlatforms.search(platform: "wy", keyword: q)
         async let builtInKw = BuiltInPlatforms.search(platform: "kw", keyword: q)
-        var collected = await builtInWy + builtInKw
+        let builtIn = await builtInWy + builtInKw
+        await MainActor.run { self.searchResults = builtIn }
 
-        // 已启用的自定义音源若具备搜索能力（music/search），结果并入列表。
+        // 已启用的自定义音源若具备搜索能力（music/search），结果再并入列表。
         for src in sources where src.enabled && src.platform != "demo" {
-            if let songs = await runtime.search(source: src, query: q) {
-                collected.append(contentsOf: songs)
+            if let songs = await runtime.search(source: src, query: q), !songs.isEmpty {
+                await MainActor.run { self.searchResults += songs }
             }
         }
 
-        await MainActor.run {
-            self.searchResults = collected
-            self.isSearching = false
-        }
+        await MainActor.run { self.isSearching = false }
     }
 
     // MARK: - 播放
@@ -95,17 +93,22 @@ final class AppStore: ObservableObject {
     /// 播放取链（按用户要求，洛雪模式）：**只用导入的音源**。
     /// 顺序：平台对应的音源 → 其他已启用的音源（洛雪行为：音源可跨平台取链）。
     /// 不使用内置平台直链兜底——VIP/版权歌曲内置接口拿不到可用链接，交由音源处理。
+    /// 失败时把脚本错误原因透传到弹窗，方便定位是音源不支持还是脚本报错。
     func play(_ song: Song) {
         Task {
             var url: String?
+            var reportError: String?
             if let src = source(for: song) {
-                url = await runtime.getUrl(source: src, song: song)
+                (url, reportError) = await runtime.getUrlWithReport(source: src, song: song)
             }
-            if url == nil, let src = sources.first(where: { $0.enabled && $0.platform != "demo" }) {
-                url = await runtime.getUrl(source: src, song: song)
+            if url == nil, let src = sources.first(where: { $0.enabled && $0.platform != "demo" && $0.id != source(for: song)?.id }) {
+                let (u, e) = await runtime.getUrlWithReport(source: src, song: song)
+                url = u
+                if e != nil { reportError = e }
             }
             guard let url else {
-                playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接，请到「音源」确认音源已启用且支持该平台。"
+                let detail = reportError.map { "\n（音源返回：\($0)）" } ?? ""
+                playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接\(detail)\n请到「音源」确认音源已启用且支持该平台。"
                 return
             }
             playbackNotice = nil

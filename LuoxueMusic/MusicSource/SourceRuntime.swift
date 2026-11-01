@@ -48,6 +48,9 @@ final class SourceRuntime {
     private var _context: JSContext?
     private var entries: [String: ScriptEntry] = [:]
 
+    /// 最近一次动作调用的失败原因（脚本异常 / Promise 拒绝 / 回调报错），用于透传给 UI。
+    private(set) var lastActionError: String?
+
     // 定时器注册表（setTimeout / setInterval）
     private var timerRetain: [Int: JSValue] = [:]
     private var timerActive: [Int: Bool] = [:]
@@ -69,6 +72,16 @@ final class SourceRuntime {
             self.runOnMainAndWait {
                 let url = self.urlOnMain(source: source, song: song)
                 cont.resume(returning: url)
+            }
+        }
+    }
+
+    /// 取链并带回失败原因（脚本异常 / Promise 拒绝内容），供 UI 提示与排障。
+    func getUrlWithReport(source: MusicSource, song: Song) async -> (url: String?, error: String?) {
+        await withCheckedContinuation { cont in
+            self.runOnMainAndWait {
+                let url = self.urlOnMain(source: source, song: song)
+                cont.resume(returning: (url, url == nil ? self.lastActionError : nil))
             }
         }
     }
@@ -270,7 +283,8 @@ final class SourceRuntime {
             raw = resolve(fn.call(withArguments: [query, page, 30]))
         } else if entry.requestHandler != nil {
             // 官方动作名 music/search 优先；老式 search / musicSearch 作为短超时候选。
-            let candidates: [(String, TimeInterval)] = [("music/search", 5), ("search", 2), ("musicSearch", 2)]
+            // （内置平台已承担搜索，这里只是兼容少数支持搜索的桌面版音源，超时给短。）
+            let candidates: [(String, TimeInterval)] = [("music/search", 4), ("search", 1), ("musicSearch", 1)]
             for (action, t) in candidates {
                 if let r = invokeAction(entry, ctx, platform: source.platform,
                                         action: action,
@@ -285,14 +299,37 @@ final class SourceRuntime {
         return parseSongs(raw, platform: source.platform)
     }
 
+    /// 从 `send(EVENT_NAMES.inited, { sources: {...} })` 里提取脚本声明的取链动作
+    /// （如 'musicUrl' / 'music/url'），没有声明则返回 nil。
+    private func declaredUrlActions(_ entry: ScriptEntry) -> Set<String>? {
+        guard let sources = entry.inited?["sources"] as? [String: Any] else { return nil }
+        var actions: Set<String> = []
+        for case let (_, src) in sources {
+            guard let srcDict = src as? [String: Any],
+                  let list = srcDict["actions"] as? [String] else { continue }
+            actions.formUnion(list)
+        }
+        return actions.isEmpty ? nil : actions
+    }
+
     private func urlOnMain(source: MusicSource, song: Song) -> String? {
         let ctx = context()
         guard let entry = prepare(ctx, source: source) else { return nil }
+        lastActionError = nil
         var raw: Any?
         if let fn = entry.exports?.objectForKeyedSubscript("getMusicUrl"), isCallable(fn) {
             raw = resolve(fn.call(withArguments: [song.toSourceInfo()]))
         } else if entry.requestHandler != nil {
-            let candidates: [(String, TimeInterval)] = [("music/url", 5), ("musicUrl", 2), ("getMusicUrl", 2)]
+            // 按脚本 inited 声明选动作；未声明则按常见顺序尝试。超时给足（取链常含网络往返）。
+            let candidates: [(String, TimeInterval)]
+            switch declaredUrlActions(entry) {
+            case let actions? where actions.contains("musicUrl") && !actions.contains("music/url"):
+                candidates = [("musicUrl", 12)]
+            case let actions? where actions.contains("music/url") && !actions.contains("musicUrl"):
+                candidates = [("music/url", 12)]
+            default:
+                candidates = [("musicUrl", 10), ("music/url", 10), ("getMusicUrl", 6)]
+            }
             for (action, t) in candidates {
                 if let r = invokeAction(entry, ctx, platform: source.platform,
                                         action: action,
@@ -365,6 +402,13 @@ final class SourceRuntime {
         }
         let payload: [String: Any] = ["source": platform, "action": action, "info": info]
         let result = handler.call(withArguments: [payload, sendResponse])
+        // 脚本同步抛异常：记录原因并立即返回（不进入 sendResponse 兜底等待）。
+        if let exc = ctx.exception {
+            lastActionError = "脚本异常: \(exc.toString() ?? "unknown")"
+            ctx.exception = nil
+            NSLog("LuoxueMusic source action '\(action)' exception: %@", lastActionError ?? "")
+            return nil
+        }
         // 方式一：处理器返回 Promise / thenable（洛雪官方主路径）。
         if let result, result.forProperty("then")?.isObject == true {
             return awaitPromise(result)
@@ -379,7 +423,11 @@ final class SourceRuntime {
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
             waited += 0.05
         }
-        if let err = box.error { NSLog("LuoxueMusic source action '\(action)' error: \(err)"); return nil }
+        if let err = box.error {
+            lastActionError = "脚本回调报错: \(err)"
+            NSLog("LuoxueMusic source action '\(action)' error: %@", err)
+            return nil
+        }
         return box.result
     }
 
@@ -485,8 +533,10 @@ final class SourceRuntime {
             result = value.toObject()
             group.leave()
         }
-        let onRejected: @convention(block) (JSValue) -> Void = { value in
-            NSLog("LuoxueMusic JS promise rejected: \(value.toString() ?? "unknown")")
+        let onRejected: @convention(block) (JSValue) -> Void = { [weak self] value in
+            let reason = value.toString() ?? "unknown"
+            NSLog("LuoxueMusic JS promise rejected: %@", reason)
+            self?.lastActionError = "脚本 Promise 拒绝: \(reason)"
             group.leave()
         }
         promise.invokeMethod("then", withArguments: [onFulfilled, onRejected])
