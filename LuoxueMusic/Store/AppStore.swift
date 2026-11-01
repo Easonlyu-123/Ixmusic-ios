@@ -11,6 +11,8 @@ final class AppStore: ObservableObject {
     @Published var playlist: [Song] = []
     @Published var currentSong: Song?
     @Published var isPlaying: Bool = false
+    /// 播放取链失败提示（洛雪模式：播放一律用导入的音源，失败时告知用户）。
+    @Published var playbackNotice: String? = nil
 
     let player = AudioPlayer()
     private let runtime = SourceRuntime()
@@ -90,23 +92,25 @@ final class AppStore: ObservableObject {
 
     // MARK: - 播放
 
-    /// 播放取链顺序（洛雪官方模式）：平台对应音源 → 任意已启用自定义音源 → 自带平台兜底。
+    /// 播放取链（按用户要求，洛雪模式）：**只用导入的音源**。
+    /// 顺序：平台对应的音源 → 其他已启用的音源（洛雪行为：音源可跨平台取链）。
+    /// 不使用内置平台直链兜底——VIP/版权歌曲内置接口拿不到可用链接，交由音源处理。
     func play(_ song: Song) {
         Task {
             var url: String?
             if let src = source(for: song) {
                 url = await runtime.getUrl(source: src, song: song)
             }
-            if url == nil, let fallback = sources.first(where: { $0.enabled && $0.platform != "demo" }) {
-                // 自定义音源可跨平台取链（洛雪行为）。
-                url = await runtime.getUrl(source: fallback, song: song)
+            if url == nil, let src = sources.first(where: { $0.enabled && $0.platform != "demo" }) {
+                url = await runtime.getUrl(source: src, song: song)
             }
-            if url == nil {
-                url = await BuiltInPlatforms.playUrl(platform: song.source, song: song)
-            }
-            guard let url else { return }
-            player.play(url: url)
             await MainActor.run {
+                guard let url else {
+                    self.playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接，请到「音源」确认音源已启用且支持该平台。"
+                    return
+                }
+                self.playbackNotice = nil
+                self.player.play(url: url)
                 self.currentSong = song
                 if !self.playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
                     self.playlist.append(song)

@@ -41,6 +41,14 @@ struct RootTabView: View {
                 NowPlayingView(song: song)
             }
         }
+        .alert("播放失败", isPresented: .binding(
+            get: { store.playbackNotice != nil },
+            set: { if !$0 { store.playbackNotice = nil } }
+        )) {
+            Button("好", role: .cancel) { store.playbackNotice = nil }
+        } message: {
+            Text(store.playbackNotice ?? "")
+        }
     }
 
     /// 深色 + 彩色光晕背景：液态玻璃需要背后有内容才能折射出质感。

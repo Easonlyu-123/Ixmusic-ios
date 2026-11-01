@@ -77,34 +77,10 @@ enum BuiltInPlatforms {
         }
     }
 
-    // MARK: - 播放直链兜底（导入音源取链失败时使用）
-
-    static func playUrl(platform: String, song: Song) async -> String? {
-        switch platform {
-        case "wy":
-            guard let data = await postForm(
-                "https://music.163.com/api/song/enhance/player/url",
-                form: ["ids": "[\(song.songId)]", "br": "320000"],
-                headers: ["Referer": "https://music.163.com"]
-            ), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let payload = root["data"] as? [[String: Any]],
-               let url = payload.first?["url"] as? String, !url.isEmpty else { return nil }
-            return url
-        case "kw":
-            guard let data = await get(
-                "http://www.kuwo.cn/api/v1/www/music/playUrl?mid=\(song.songId)&type=music&httpsStatus=1",
-                headers: ["Referer": "http://www.kuwo.cn/", "csrf": "lx\(Int.random(in: 100_000...999_999))",
-                          "Cookie": "kw_token=lx\(Int.random(in: 100_000...999_999))"]
-            ), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-               let payload = root["data"] as? [String: Any],
-               let url = payload["url"] as? String, !url.isEmpty else { return nil }
-            return url
-        default:
-            return nil
-        }
-    }
-
     // MARK: - 歌词兜底
+    //
+    // 播放直链不再由内置平台提供（洛雪模式：播放一律用导入的音源），
+    // 歌词属于展示信息，保留网易云歌词接口作为兜底。
 
     static func lyric(platform: String, song: Song) async -> String? {
         guard platform == "wy",
