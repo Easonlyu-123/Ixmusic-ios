@@ -737,14 +737,15 @@ final class SourceRuntime {
         guard !input.isEmpty else { return [] }
         let capacity = compress ? input.count * 2 + 1024 : input.count * 4 + 1024
         var out = [UInt8](repeating: 0, count: max(capacity, 64))
+        let outCount = out.count
         let written = input.withUnsafeBytes { inPtr in
             out.withUnsafeMutableBytes { outPtr in
                 if compress {
-                    return compression_encode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: out.count), out.count,
+                    return compression_encode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: outCount), outCount,
                                                     inPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: input.count), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 } else {
-                    return compression_decode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: out.count), out.count,
+                    return compression_decode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: outCount), outCount,
                                                     inPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: input.count), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 }
