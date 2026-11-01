@@ -104,6 +104,21 @@ final class AppStore: ObservableObject {
         return await runtime.getLyric(source: src, song: song)
     }
 
+    /// 播放列表导航（Apple Music 风格的上一首/下一首）。
+    func playNext() {
+        guard let cur = currentSong,
+              let idx = playlist.firstIndex(where: { $0.source == cur.source && $0.songId == cur.songId }),
+              idx + 1 < playlist.count else { return }
+        play(playlist[idx + 1])
+    }
+
+    func playPrevious() {
+        guard let cur = currentSong,
+              let idx = playlist.firstIndex(where: { $0.source == cur.source && $0.songId == cur.songId }),
+              idx > 0 else { return }
+        play(playlist[idx - 1])
+    }
+
     func togglePlay() {
         player.togglePlayPause()
         isPlaying = player.isPlaying

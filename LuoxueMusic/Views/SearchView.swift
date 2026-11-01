@@ -54,33 +54,56 @@ struct SearchView: View {
     }
 }
 
+/// Apple Music 风格的歌曲行：封面占位 + 标题/歌手两行 + 尾部时长。
 struct SongRow: View {
     let song: Song
     @EnvironmentObject private var store: AppStore
+
+    private var artColors: [Color] {
+        let seed = abs(song.songId.hashValue)
+        let hue = Double(seed % 360) / 360.0
+        return [
+            Color(hue: hue, saturation: 0.55, brightness: 0.75),
+            Color(hue: (hue + 0.12).truncatingRemainder(dividingBy: 1.0), saturation: 0.7, brightness: 0.45)
+        ]
+    }
 
     var body: some View {
         Button {
             store.play(song)
         } label: {
             HStack(spacing: 12) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 6)
+                        .fill(LinearGradient(colors: artColors, startPoint: .topLeading, endPoint: .bottomTrailing))
+                    Image(systemName: "music.note")
+                        .font(.system(size: 16, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
+                .frame(width: 44, height: 44)
+
                 VStack(alignment: .leading, spacing: 3) {
                     Text(song.displayTitle)
-                        .font(.body.weight(.medium))
+                        .font(.body)
                         .foregroundStyle(.primary)
-                    Text("\(song.displayArtist) · \(song.album)")
+                        .lineLimit(1)
+                    Text(song.album.isEmpty ? song.displayArtist : "\(song.displayArtist) · \(song.album)")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                         .lineLimit(1)
                 }
                 Spacer(minLength: 8)
-                Text(song.source)
-                    .font(.caption2)
-                    .padding(.horizontal, 8)
-                    .padding(.vertical, 3)
-                    .glassEffect(.regular, in: Capsule())
+                Text(timeString(song.duration))
+                    .font(.caption.monospacedDigit())
+                    .foregroundStyle(.secondary)
             }
-            .padding(.vertical, 4)
+            .padding(.vertical, 3)
         }
         .buttonStyle(.plain)
+    }
+
+    private func timeString(_ t: Int) -> String {
+        guard t > 0 else { return "--:--" }
+        return "\(t / 60):\(String(format: "%02d", t % 60))"
     }
 }

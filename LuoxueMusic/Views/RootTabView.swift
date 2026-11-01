@@ -4,6 +4,9 @@ struct RootTabView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showNowPlaying = false
 
+    /// Apple Music 主题红。
+    static let appleMusicRed = Color(red: 250 / 255.0, green: 35 / 255.0, blue: 59 / 255.0)
+
     var body: some View {
         ZStack {
             backgroundView
@@ -17,7 +20,9 @@ struct RootTabView: View {
                 SourcesView()
                     .tabItem { Label("音源", systemImage: "server.rack") }
             }
+            .tint(Self.appleMusicRed)
         }
+        .tint(Self.appleMusicRed)
         .overlay(alignment: .bottom) {
             if store.currentSong != nil {
                 Button {
@@ -58,15 +63,25 @@ struct RootTabView: View {
     }
 }
 
-/// 底部玻璃质感的迷你播放条。
+/// 底部玻璃质感的迷你播放条（Apple Music 样式：封面 + 标题 + 播放/下一首）。
 struct NowPlayingBar: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
         HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(LinearGradient(
+                    colors: [Color.purple.opacity(0.8), Color.blue.opacity(0.7)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+                .frame(width: 42, height: 42)
+                .overlay {
+                    Image(systemName: "music.note")
+                        .font(.system(size: 15, weight: .medium))
+                        .foregroundStyle(.white.opacity(0.9))
+                }
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.currentSong?.displayTitle ?? "")
-                    .font(.headline)
+                    .font(.subheadline.weight(.medium))
                     .lineLimit(1)
                 Text(store.currentSong?.displayArtist ?? "")
                     .font(.caption)
@@ -78,14 +93,22 @@ struct NowPlayingBar: View {
                 store.togglePlay()
             } label: {
                 Image(systemName: store.isPlaying ? "pause.fill" : "play.fill")
-                    .font(.title2)
+                    .font(.title3)
                     .foregroundStyle(.primary)
-                    .frame(width: 40, height: 40)
-                    .glassEffect(.regular, in: Circle())
+                    .frame(width: 38, height: 38)
+            }
+            .buttonStyle(.plain)
+            Button {
+                store.playNext()
+            } label: {
+                Image(systemName: "forward.fill")
+                    .font(.title3)
+                    .foregroundStyle(.primary)
+                    .frame(width: 38, height: 38)
             }
             .buttonStyle(.plain)
         }
-        .padding(14)
+        .padding(10)
         .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
     }
 }

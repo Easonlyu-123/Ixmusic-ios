@@ -6,6 +6,7 @@ struct SourcesView: View {
     @State private var showDocumentPicker = false
     @State private var draftScript = ""
     @State private var draftName = ""
+    @State private var draftAuthor = ""
 
     var body: some View {
         NavigationStack {
@@ -84,6 +85,7 @@ struct SourcesView: View {
             AddSourceSheet(
                 script: $draftScript,
                 name: $draftName,
+                author: $draftAuthor,
                 onPickFile: {
                     // AddSourceSheet 内部已 dismiss() 关闭自己，
                     // 这里只需让 SourcesView 在主体层级弹出系统文件选择器（标准圆圈 + 打开按钮）。
@@ -97,7 +99,13 @@ struct SourcesView: View {
                 onPick: { url in
                     if let content = try? String(contentsOf: url, encoding: .utf8) {
                         draftScript = content
-                        if draftName.isEmpty { draftName = url.deletingPathExtension().lastPathComponent }
+                        if draftName.isEmpty {
+                            draftName = SourceRuntime.parseScriptInfo(content)["name"] as? String
+                                ?? url.deletingPathExtension().lastPathComponent
+                        }
+                        if let author = SourceRuntime.parseScriptInfo(content)["author"] as? String {
+                            draftAuthor = author
+                        }
                     }
                     showDocumentPicker = false
                     showAddSheet = true
@@ -117,10 +125,10 @@ struct AddSourceSheet: View {
     @Environment(\.dismiss) private var dismiss
     @Binding var script: String
     @Binding var name: String
+    @Binding var author: String
     var onPickFile: () -> Void
 
     @State private var platform = ""
-    @State private var author = ""
     @State private var importError: String?
 
     var body: some View {
@@ -179,6 +187,7 @@ struct AddSourceSheet: View {
     private func resetDrafts() {
         script = ""
         name = ""
+        author = ""
         importError = nil
     }
 
@@ -188,15 +197,22 @@ struct AddSourceSheet: View {
             importError = "请粘贴或导入洛雪音源脚本"
             return
         }
-        guard trimmed.contains("module.exports") else {
-            importError = "脚本需以 module.exports 导出音源对象"
+        // 两种洛雪官方格式都接受：
+        // 1) module.exports = {...} 老式导出；2) globalThis.lx user-api（on(EVENT_NAMES.request, ...)）。
+        let isModuleStyle = trimmed.contains("module.exports")
+        let isLxApiStyle = trimmed.contains("globalThis.lx") || trimmed.contains("lx.on")
+            || trimmed.contains("EVENT_NAMES")
+        guard isModuleStyle || isLxApiStyle else {
+            importError = "脚本需为洛雪音源格式：以 module.exports 导出，或调用 globalThis.lx 注册 request 处理器"
             return
         }
+        let info = SourceRuntime.parseScriptInfo(trimmed)
+        let headerVersion = info["version"] as? String
         let source = MusicSource(
-            name: name.isEmpty ? "未命名音源" : name,
-            version: "1.0.0",
+            name: name.isEmpty ? ((info["name"] as? String) ?? "未命名音源") : name,
+            version: headerVersion ?? "1.0.0",
             platform: platform.isEmpty ? "custom" : platform,
-            author: author.isEmpty ? "未知" : author,
+            author: author.isEmpty ? ((info["author"] as? String) ?? "未知") : author,
             script: trimmed,
             enabled: true
         )

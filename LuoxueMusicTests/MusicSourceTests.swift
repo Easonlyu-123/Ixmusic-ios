@@ -70,4 +70,104 @@ struct MusicSourceRuntimeTests {
         #expect(songs?.count == 1)
         #expect(songs?.first?.title == "hello 测试")
     }
+
+    // MARK: - 洛雪官方 user-api 格式（globalThis.lx）
+
+    private func makeLxApiSource() -> MusicSource {
+        let script = """
+        /**
+         * @name LX官方格式测试源
+         * @description 测试 globalThis.lx user-api
+         * @version 3.1.0
+         * @author lxtester
+         * @homepage https://example.com
+         */
+        const { EVENT_NAMES, on, send, utils } = globalThis.lx;
+
+        on(EVENT_NAMES.request, ({ source, action, info }) => {
+          if (action === 'musicSearch') {
+            return {
+              list: [ { songmid: 'lx-1', songname: info.searchWord + ' LX', singer: [{ name: '李四' }], albumName: 'LX专辑', interval: 180, source: source } ],
+              total: 1, allPage: 1, limit: info.limit
+            };
+          }
+          if (action === 'musicUrl') {
+            return 'https://example.com/' + info.musicInfo.songmid + '.mp3';
+          }
+          if (action === 'lyric') {
+            return { lyric: '[00:01.00]LX官方格式歌词' };
+          }
+        });
+
+        send(EVENT_NAMES.inited, { status: true, openDevTools: false, sources: { musicSearch: true, musicUrl: true, lyric: true } });
+        """
+        return MusicSource(name: "LX官方格式测试源", version: "3.1.0", platform: "lxtest",
+                           author: "lxtester", script: script, enabled: true)
+    }
+
+    @Test("洛雪官方 user-api 格式：搜索返回结果并解析 lx 字段")
+    func lxApiSearch() async {
+        let runtime = SourceRuntime()
+        let source = makeLxApiSource()
+        let songs = await runtime.search(source: source, query: "周杰伦")
+        #expect(songs != nil)
+        #expect(songs?.count == 1)
+        #expect(songs?.first?.title == "周杰伦 LX")
+        #expect(songs?.first?.artist == "李四")           // singer 数组会被拍平
+        #expect(songs?.first?.album == "LX专辑")          // albumName 字段
+        #expect(songs?.first?.duration == 180)
+    }
+
+    @Test("洛雪官方 user-api 格式：musicUrl 与 lyric 动作")
+    func lxApiUrlAndLyric() async {
+        let runtime = SourceRuntime()
+        let source = makeLxApiSource()
+        let song = Song(source: "lxtest", songId: "lx-1", title: "x", artist: "y",
+                        album: "z", duration: 0, picUrl: "", lrcUrl: "")
+        let url = await runtime.getUrl(source: source, song: song)
+        #expect(url == "https://example.com/lx-1.mp3")
+        let lyric = await runtime.getLyric(source: source, song: song)
+        #expect(lyric?.contains("LX官方格式歌词") == true)
+    }
+
+    @Test("lx.utils：md5 与 buffer base64 可用")
+    func lxUtilsCryptoAndBuffer() async {
+        let script = """
+        const { EVENT_NAMES, on, send, utils } = globalThis.lx;
+        on(EVENT_NAMES.request, ({ action }) => {
+          if (action === 'musicSearch') {
+            return { list: [
+              { songmid: 'm1', songname: utils.crypto.md5('abc'), singer: 'h' },
+              { songmid: 'm2', songname: utils.buffer.from('你好', 'utf-8').toString('base64'), singer: 'h' }
+            ] };
+          }
+        });
+        send(EVENT_NAMES.inited, { status: true, sources: { musicSearch: true } });
+        """
+        let source = MusicSource(name: "utils测试", version: "1.0.0", platform: "ux",
+                                 author: "t", script: script, enabled: true)
+        let runtime = SourceRuntime()
+        let songs = await runtime.search(source: source, query: "x")
+        #expect(songs?.count == 2)
+        #expect(songs?[0].title == "900150983cd24fb0d6963f7d28e17f72")
+        #expect(songs?[1].title == "5L2g5aW9")
+    }
+
+    @Test("脚本头信息解析：@name/@author/@version")
+    func parseScriptHeader() {
+        let info = SourceRuntime.parseScriptInfo(makeLxApiSource().script)
+        #expect(info["name"] as? String == "LX官方格式测试源")
+        #expect(info["author"] as? String == "lxtester")
+        #expect(info["version"] as? String == "3.1.0")
+    }
+
+    @Test("同一官方格式音源可反复搜索（缓存与作用域隔离）")
+    func lxApiRepeatedSearch() async {
+        let runtime = SourceRuntime()
+        let source = makeLxApiSource()
+        let first = await runtime.search(source: source, query: "a")
+        let second = await runtime.search(source: source, query: "b")
+        #expect(first?.first?.title == "a LX")
+        #expect(second?.first?.title == "b LX")
+    }
 }
