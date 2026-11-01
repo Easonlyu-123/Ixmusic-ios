@@ -740,12 +740,12 @@ final class SourceRuntime {
         let written = input.withUnsafeBytes { inPtr in
             out.withUnsafeMutableBytes { outPtr in
                 if compress {
-                    return compression_encode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self), out.count,
-                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self), input.count,
+                    return compression_encode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: out.count), out.count,
+                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: input.count), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 } else {
-                    return compression_decode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self), out.count,
-                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self), input.count,
+                    return compression_decode_buffer(outPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: out.count), out.count,
+                                                    inPtr.baseAddress!.bindMemory(to: UInt8.self, capacity: input.count), input.count,
                                                     nil, COMPRESSION_ZLIB)
                 }
             }
