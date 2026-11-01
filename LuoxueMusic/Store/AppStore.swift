@@ -104,19 +104,17 @@ final class AppStore: ObservableObject {
             if url == nil, let src = sources.first(where: { $0.enabled && $0.platform != "demo" }) {
                 url = await runtime.getUrl(source: src, song: song)
             }
-            await MainActor.run {
-                guard let url else {
-                    self.playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接，请到「音源」确认音源已启用且支持该平台。"
-                    return
-                }
-                self.playbackNotice = nil
-                self.player.play(url: url)
-                self.currentSong = song
-                if !self.playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
-                    self.playlist.append(song)
-                }
-                self.isPlaying = true
+            guard let url else {
+                playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接，请到「音源」确认音源已启用且支持该平台。"
+                return
             }
+            playbackNotice = nil
+            player.play(url: url)
+            currentSong = song
+            if !playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
+                playlist.append(song)
+            }
+            isPlaying = true
         }
     }
 
