@@ -90,25 +90,33 @@ final class AppStore: ObservableObject {
 
     // MARK: - 播放
 
-    /// 播放取链（按用户要求，洛雪模式）：**只用导入的音源**。
-    /// 顺序：平台对应的音源 → 其他已启用的音源（洛雪行为：音源可跨平台取链）。
-    /// 不使用内置平台直链兜底——VIP/版权歌曲内置接口拿不到可用链接，交由音源处理。
-    /// 失败时把脚本错误原因透传到弹窗，方便定位是音源不支持还是脚本报错。
+    /// 播放取链：平台对应音源 → 其他所有已启用音源（逐个尝试，洛雪行为：音源可跨平台取链）
+    /// → 内置平台直链兜底（保证非 VIP 的内置平台歌曲始终可放；VIP/版权歌曲仍需音源）。
+    /// 全部失败时把最后一个错误透传到弹窗，方便定位。
     func play(_ song: Song) {
         Task {
             var url: String?
-            var reportError: String?
-            if let src = source(for: song) {
-                (url, reportError) = await runtime.getUrlWithReport(source: src, song: song)
-            }
-            if url == nil, let src = sources.first(where: { $0.enabled && $0.platform != "demo" && $0.id != source(for: song)?.id }) {
+            var lastError: String?
+            var tried: [String] = []
+
+            for src in orderedCandidateSources(for: song) {
                 let (u, e) = await runtime.getUrlWithReport(source: src, song: song)
-                url = u
-                if e != nil { reportError = e }
+                if let u {
+                    url = u
+                    break
+                }
+                if let e { lastError = e }
+                tried.append(src.name)
             }
+
+            if url == nil {
+                url = await BuiltInPlatforms.playUrl(platform: song.source, song: song)
+            }
+
             guard let url else {
-                let detail = reportError.map { "\n（音源返回：\($0)）" } ?? ""
-                playbackNotice = "无法通过已导入音源获取「\(song.displayTitle)」的播放链接\(detail)\n请到「音源」确认音源已启用且支持该平台。"
+                let detail = lastError.map { "\n（音源返回：\($0)）" } ?? ""
+                let names = tried.isEmpty ? "" : "\n已尝试音源：\(tried.joined(separator: "、"))"
+                playbackNotice = "「\(song.displayTitle)」暂无法播放\(detail)\(names)\nVIP/版权歌曲需音源支持该平台。"
                 return
             }
             playbackNotice = nil
@@ -119,6 +127,17 @@ final class AppStore: ObservableObject {
             }
             isPlaying = true
         }
+    }
+
+    /// 取链候选：平台对应的音源优先，随后是其他已启用音源（跳过演示源）。
+    private func orderedCandidateSources(for song: Song) -> [MusicSource] {
+        let usable = sources.filter { $0.enabled && $0.platform != "demo" }
+        var ordered: [MusicSource] = []
+        if let matched = usable.first(where: { $0.platform == song.source }) {
+            ordered.append(matched)
+        }
+        ordered += usable.filter { $0.id != ordered.first?.id }
+        return ordered
     }
 
     func lyric(for song: Song) async -> String? {

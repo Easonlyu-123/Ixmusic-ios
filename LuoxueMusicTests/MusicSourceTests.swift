@@ -259,4 +259,56 @@ struct MusicSourceRuntimeTests {
         #expect(url == "https://example.com/42.mp3")
         #expect(error == nil)
     }
+
+    // MARK: - LRC 歌词解析（Apple Music 风格歌词页）
+
+    @Test("LRC 解析：时间标签、多标签行、乱序排序")
+    func lrcParsing() {
+        let lrc = """
+        [00:00.50]第一行
+        [00:10][00:30.5]重复行
+        [xx:yy]非法行
+        [00:05.25]第二行
+        纯文本行
+        """
+        let lines = LrcParser.parse(lrc)
+        #expect(lines.map { $0.text } == ["第一行", "第二行", "重复行", "重复行"])
+        #expect(abs(lines[0].time - 0.5) < 0.001)
+        #expect(abs(lines[1].time - 5.25) < 0.001)
+        #expect(abs(lines[2].time - 10.0) < 0.001)
+        #expect(abs(lines[3].time - 30.5) < 0.001)
+    }
+
+    @Test("LRC 当前行二分定位")
+    func lrcCurrentIndex() {
+        let lines = LrcParser.parse("[00:01]A\n[00:05]B\n[00:09]C")
+        #expect(LrcParser.currentIndex(of: lines, at: 0.5) == -1)
+        #expect(LrcParser.currentIndex(of: lines, at: 1.0) == 0)
+        #expect(LrcParser.currentIndex(of: lines, at: 6.0) == 1)
+        #expect(LrcParser.currentIndex(of: lines, at: 99) == 2)
+    }
+
+    // MARK: - 内置平台直链解析（播放兜底）
+
+    @Test("内置网易云直链解析")
+    func neteaseUrlParsing() throws {
+        let json = """
+        {"data":[{"id":186016,"url":"http://m801.music.126.net/abc.mp3","br":320000}],"code":200}
+        """.data(using: .utf8)!
+        #expect(BuiltInPlatforms.parseNeteaseUrl(json) == "http://m801.music.126.net/abc.mp3")
+        // VIP 无权限时 url 为 null
+        let vip = """
+        {"data":[{"id":2,"url":null,"code":-200}],"code":200}
+        """.data(using: .utf8)!
+        #expect(BuiltInPlatforms.parseNeteaseUrl(vip) == nil)
+    }
+
+    @Test("内置酷我直链解析")
+    func kuwoUrlParsing() throws {
+        let json = """
+        {"code":200,"data":{"url":"http://other.web.ri01.sycdn.kuwo.cn/x.mp3"}}
+        """.data(using: .utf8)!
+        #expect(BuiltInPlatforms.parseKuwoUrl(json) == "http://other.web.ri01.sycdn.kuwo.cn/x.mp3")
+        #expect(BuiltInPlatforms.parseKuwoSongs(Data("not json".utf8)).isEmpty)
+    }
 }

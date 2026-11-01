@@ -5,7 +5,12 @@ struct NowPlayingView: View {
     let song: Song
     @EnvironmentObject private var store: AppStore
     @Environment(\.dismiss) private var dismiss
-    @State private var lyric: String?
+    @State private var lyricLines: [LrcLine] = []
+
+    // 进度条拖动状态：拖动期间显示拖动位置，松手才真正 seek，
+    // 避免 0.5s 一次的进度观察器把滑块拉回去（拖动 bug 的根因）。
+    @State private var isScrubbing = false
+    @State private var scrubValue: Double = 0
 
     /// 封面占位渐变色（按歌名生成稳定观感的色调）。
     private var artColors: [Color] {
@@ -33,7 +38,6 @@ struct NowPlayingView: View {
                 progressBlock
                 controls
                 lyricBlock
-                Spacer(minLength: 8)
             }
             .padding(.horizontal, 24)
         }
@@ -98,18 +102,32 @@ struct NowPlayingView: View {
     private var progressBlock: some View {
         VStack(spacing: 4) {
             Slider(value: Binding(
-                get: { store.player.currentTime },
-                set: { store.seek(to: $0) }
-            ), in: 0...max(store.player.duration, 1))
+                get: { isScrubbing ? scrubValue : store.player.currentTime },
+                set: { scrubValue = $0 }
+            ), in: 0...max(store.player.duration, 1)) { editing in
+                if editing {
+                    isScrubbing = true
+                    scrubValue = store.player.currentTime
+                } else {
+                    // 松手才 seek 一次；拖动过程中不 seek、不被观察器回写。
+                    store.seek(to: scrubValue)
+                    store.player.currentTime = scrubValue
+                    isScrubbing = false
+                }
+            }
             HStack {
-                Text(timeString(store.player.currentTime))
+                Text(timeString(displayTime))
                 Spacer()
-                Text("-" + timeString(max(store.player.duration - store.player.currentTime, 0)))
+                Text("-" + timeString(max(store.player.duration - displayTime, 0)))
             }
             .font(.caption2.monospacedDigit())
             .foregroundStyle(.secondary)
         }
         .padding(.top, 10)
+    }
+
+    private var displayTime: Double {
+        isScrubbing ? scrubValue : store.player.currentTime
     }
 
     private var controls: some View {
@@ -138,29 +156,17 @@ struct NowPlayingView: View {
         .padding(.vertical, 10)
     }
 
+    // MARK: - 歌词（Apple Music 风格：大字加粗左对齐、当前行高亮、自动滚动、点击跳转）
+
     private var lyricBlock: some View {
-        Group {
-            if let lyric {
-                ScrollView {
-                    Text(lyric)
-                        .font(.callout)
-                        .foregroundStyle(.secondary)
-                        .multilineTextAlignment(.leading)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                }
-                .frame(maxHeight: 150)
-            } else {
-                Text("暂无歌词")
-                    .font(.caption)
-                    .foregroundStyle(.tertiary)
-                    .frame(maxWidth: .infinity, alignment: .center)
-            }
-        }
-        .padding(.top, 6)
+        LyricView(lines: lyricLines,
+                  currentTime: store.player.currentTime) { store.seek(to: $0) }
+            .padding(.top, 6)
     }
 
     private func loadLyric() async {
-        lyric = await store.lyric(for: song)
+        let text = await store.lyric(for: song) ?? ""
+        await MainActor.run { self.lyricLines = LrcParser.parse(text) }
     }
 
     private func timeString(_ t: Double) -> String {
@@ -169,5 +175,57 @@ struct NowPlayingView: View {
         let m = total / 60
         let s = total % 60
         return "\(m):\(String(format: "%02d", s))"
+    }
+}
+
+/// 逐行歌词视图：当前行不透明、其余淡化，随播放自动滚动到当前行，点击任意行跳转播放。
+private struct LyricView: View {
+    let lines: [LrcLine]
+    let currentTime: Double
+    let seek: (Double) -> Void
+
+    private var currentIdx: Int {
+        LrcParser.currentIndex(of: lines, at: currentTime)
+    }
+
+    var body: some View {
+        if lines.isEmpty {
+            Text("暂无歌词")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
+                .frame(maxWidth: .infinity, alignment: .center)
+                .padding(.bottom, 24)
+        } else {
+            ScrollViewReader { proxy in
+                ScrollView {
+                    LazyVStack(alignment: .leading, spacing: 16) {
+                        ForEach(lines) { line in
+                            Text(line.text.isEmpty ? "♪" : line.text)
+                                .font(.title3.bold())
+                                .foregroundStyle(line.id == currentIdx
+                                                 ? AnyShapeStyle(.primary)
+                                                 : AnyShapeStyle(.primary.opacity(0.35)))
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                .contentShape(Rectangle())
+                                .onTapGesture { seek(line.time) }
+                                .id(line.id)
+                        }
+                    }
+                    .padding(.vertical, 60)
+                }
+                .frame(maxHeight: 300)
+                .mask(
+                    LinearGradient(colors: [.clear, .black, .black, .clear],
+                                   startPoint: .top, endPoint: .bottom)
+                )
+                .onChange(of: currentTime) { _, t in
+                    let idx = LrcParser.currentIndex(of: lines, at: t)
+                    guard idx >= 0 else { return }
+                    withAnimation(.easeInOut(duration: 0.3)) {
+                        proxy.scrollTo(idx, anchor: .center)
+                    }
+                }
+            }
+        }
     }
 }

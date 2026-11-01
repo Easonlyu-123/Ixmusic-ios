@@ -59,7 +59,10 @@ final class AudioPlayer {
     }
 
     func seek(to seconds: Double) {
-        player?.seek(to: CMTime(seconds: max(0, seconds), preferredTimescale: 600))
+        let s = max(0, seconds.isFinite ? seconds : 0)
+        player?.seek(to: CMTime(seconds: s, preferredTimescale: 600))
+        // 立即回写进度，松手滑块不回跳，时间标签同步。
+        currentTime = s
     }
 
     private func addTimeObserver(for item: AVPlayerItem) {

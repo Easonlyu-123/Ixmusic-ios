@@ -77,9 +77,49 @@ enum BuiltInPlatforms {
         }
     }
 
+    // MARK: - 播放直链最后兜底
+    //
+    // 用户要求：非 VIP 的内置平台歌曲应始终可放（导入音源失败时兜底）。
+    // 网易云/酷我的公开直链接口对大部分免费歌曲可用，VIP/版权歌曲拿不到——这类歌必须靠导入音源。
+
+    static func playUrl(platform: String, song: Song) async -> String? {
+        switch platform {
+        case "wy":
+            guard let data = await postForm(
+                "https://music.163.com/api/song/enhance/player/url",
+                form: ["ids": "[\(song.songId)]", "br": "320000"],
+                headers: ["Referer": "https://music.163.com"]
+            ), let url = parseNeteaseUrl(data) else { return nil }
+            return url
+        case "kw":
+            guard let data = await get(
+                "http://www.kuwo.cn/api/v1/www/music/playUrl?mid=\(song.songId)&type=music&httpsStatus=1",
+                headers: ["Referer": "http://www.kuwo.cn/", "csrf": "lx\(Int.random(in: 100_000...999_999))",
+                          "Cookie": "kw_token=lx\(Int.random(in: 100_000...999_999))"]
+            ), let url = parseKuwoUrl(data) else { return nil }
+            return url
+        default:
+            return nil
+        }
+    }
+
+    static func parseNeteaseUrl(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = root["data"] as? [[String: Any]],
+              let url = payload.first?["url"] as? String, !url.isEmpty else { return nil }
+        return url
+    }
+
+    static func parseKuwoUrl(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = root["data"] as? [String: Any],
+              let url = payload["url"] as? String, !url.isEmpty else { return nil }
+        return url
+    }
+
     // MARK: - 歌词兜底
     //
-    // 播放直链不再由内置平台提供（洛雪模式：播放一律用导入的音源），
+    // 播放直链优先用导入的音源，内置平台直链仅作最后兜底；
     // 歌词属于展示信息，保留网易云歌词接口作为兜底。
 
     static func lyric(platform: String, song: Song) async -> String? {
