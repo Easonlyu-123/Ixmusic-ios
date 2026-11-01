@@ -16,6 +16,7 @@ struct SearchView: View {
                 }
             }
             .navigationTitle("搜索")
+            .navigationBarTitleDisplayMode(.large)
         }
         .searchable(text: $query, prompt: "歌曲 / 歌手")
         .onSubmit(of: .search) {

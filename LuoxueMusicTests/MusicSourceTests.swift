@@ -45,7 +45,7 @@ struct MusicSourceRuntimeTests {
         let data = try JSONEncoder().encode(source)
         let decoded = try JSONDecoder().decode(MusicSource.self, from: data)
         #expect(decoded.platform == "demo")
-        #expect(decoded.script.contains("module.exports"))
+        #expect(decoded.script.contains("globalThis.lx"))
         #expect(decoded.script == source.script)
     }
 
@@ -86,13 +86,13 @@ struct MusicSourceRuntimeTests {
         const { EVENT_NAMES, on, send, utils } = globalThis.lx;
 
         on(EVENT_NAMES.request, ({ source, action, info }) => {
-          if (action === 'musicSearch') {
+          if (action === 'music/search' || action === 'musicSearch') {
             return {
               list: [ { songmid: 'lx-1', songname: info.searchWord + ' LX', singer: [{ name: '李四' }], albumName: 'LX专辑', interval: 180, source: source } ],
               total: 1, allPage: 1, limit: info.limit
             };
           }
-          if (action === 'musicUrl') {
+          if (action === 'music/url' || action === 'musicUrl') {
             return 'https://example.com/' + info.musicInfo.songmid + '.mp3';
           }
           if (action === 'lyric') {
@@ -136,7 +136,7 @@ struct MusicSourceRuntimeTests {
         let script = """
         const { EVENT_NAMES, on, send, utils } = globalThis.lx;
         on(EVENT_NAMES.request, ({ action }) => {
-          if (action === 'musicSearch') {
+          if (action === 'music/search' || action === 'musicSearch') {
             return { list: [
               { songmid: 'm1', songname: utils.crypto.md5('abc'), singer: 'h' },
               { songmid: 'm2', songname: utils.buffer.from('你好', 'utf-8').toString('base64'), singer: 'h' }

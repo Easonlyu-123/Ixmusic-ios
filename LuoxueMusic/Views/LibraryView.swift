@@ -24,7 +24,8 @@ struct LibraryView: View {
                     .listStyle(.plain)
                 }
             }
-            .navigationTitle("媒体库")
+            .navigationTitle("资料库")
+            .navigationBarTitleDisplayMode(.large)
         }
     }
 }

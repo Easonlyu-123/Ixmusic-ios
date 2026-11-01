@@ -10,15 +10,16 @@ struct RootTabView: View {
     var body: some View {
         ZStack {
             backgroundView
+            // 底部栏顺序对齐 Apple Music：资料库在左、搜索在最右，中间为音源管理。
             TabView {
-                SearchView()
-                    .tabItem { Label("搜索", systemImage: "magnifyingglass") }
-
                 LibraryView()
-                    .tabItem { Label("媒体库", systemImage: "music.note.list") }
+                    .tabItem { Label("资料库", systemImage: "music.note.list") }
 
                 SourcesView()
                     .tabItem { Label("音源", systemImage: "server.rack") }
+
+                SearchView()
+                    .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             }
             .tint(Self.appleMusicRed)
         }
