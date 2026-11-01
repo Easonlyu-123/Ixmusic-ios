@@ -27,7 +27,11 @@ enum LrcParser {
             for m in matches {
                 let mm = Double(ns.substring(with: m.range(at: 1))) ?? 0
                 let ss = Double(ns.substring(with: m.range(at: 2))) ?? 0
-                let fracStr = ns.substring(with: m.range(at: 3))
+                // 可选分组未参与匹配时 range(at:) 返回 {NSNotFound, 0}，
+                // 直接 substring 会抛 NSRangeException，必须先判断。
+                let r3 = m.range(at: 3)
+                let fracStr = (r3.location != NSNotFound && r3.location != 0)
+                    ? ns.substring(with: r3) : ""
                 let frac: Double
                 if fracStr.isEmpty {
                     frac = 0
