@@ -28,7 +28,9 @@ enum BuiltInDemoSource {
             { songmid: 'demo-2', songname: q + ' - 示例曲目二', singer: '演示歌手', albumname: '演示专辑', interval: 198 }
           ]);
         }
-        // 获取播放直链：info = { type, musicInfo }；返回 URL 字符串
+        // 获取播放直链：info = { type, musicInfo }；返回 URL 字符串。
+        // 官方移动端动作为 musicUrl，music/url 为桌面端别名，两者都兼容。
+        case 'musicUrl':
         case 'music/url': {
           return Promise.resolve('https://www.soundhelix.com/examples/mp3/SoundHelix-Song-1.mp3');
         }
