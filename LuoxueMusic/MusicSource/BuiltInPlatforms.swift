@@ -9,7 +9,7 @@ import Foundation
 enum BuiltInPlatforms {
 
     /// 平台标识与展示名
-    static let all: [(id: String, name: String)] = [("wy", "网易云"), ("kw", "酷我")]
+    static let all: [(id: String, name: String)] = [("wy", "网易云"), ("kw", "酷我"), ("tx", "QQ音乐")]
 
     // MARK: - 搜索
 
@@ -32,8 +32,40 @@ enum BuiltInPlatforms {
                           "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"]
             ) else { return [] }
             return parseKuwoSongs(data)
+        case "tx":
+            // QQ 音乐公开搜索接口（周杰伦等版权歌曲在网易云/酷我缺失，QQ 曲库可搜到）。
+            guard let data = await get(
+                "https://c.y.qq.com/soso/fcgi-bin/client_search_cp?w=\(keyword.urlEncoded)&format=json&n=\(limit)&p=\(page)&cr=1&g_tk=5381&t=0&platform=yqq.json",
+                headers: ["Referer": "https://y.qq.com/",
+                          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"]
+            ) else { return [] }
+            return parseQQSongs(data)
         default:
             return []
+        }
+    }
+
+    /// QQ 音乐搜索结果解析：data.song.list[] → Song（封面用 albummid 拼图床地址）。
+    static func parseQQSongs(_ data: Data) -> [Song] {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let payload = root["data"] as? [String: Any],
+              let song = payload["song"] as? [String: Any],
+              let list = song["list"] as? [[String: Any]] else { return [] }
+        return list.compactMap { item in
+            guard let mid = item["songmid"] as? String
+                    ?? (item["songid"] as? Int).map(String.init)
+                    ?? (item["songid"] as? String) else { return nil }
+            let singers = (item["singer"] as? [[String: Any]])?.compactMap { $0["name"] as? String } ?? []
+            let albumMid = item["albummid"] as? String ?? ""
+            let pic = albumMid.isEmpty ? ""
+                : "https://y.gtimg.cn/music/photo_new/T002R300x300M000\(albumMid).jpg"
+            let interval = (item["interval"] as? Int) ?? ((item["interval"] as? Double).map { Int($0) }) ?? 0
+            return Song(source: "tx", songId: mid,
+                        title: item["songname"] as? String ?? "",
+                        artist: singers.joined(separator: " / "),
+                        album: item["albumname"] as? String ?? "",
+                        duration: interval,
+                        picUrl: pic, lrcUrl: "")
         }
     }
 
@@ -85,12 +117,17 @@ enum BuiltInPlatforms {
     static func playUrl(platform: String, song: Song) async -> String? {
         switch platform {
         case "wy":
-            guard let data = await postForm(
+            if let data = await postForm(
                 "https://music.163.com/api/song/enhance/player/url",
                 form: ["ids": "[\(song.songId)]", "br": "320000"],
                 headers: ["Referer": "https://music.163.com"]
-            ), let url = parseNeteaseUrl(data) else { return nil }
-            return url
+            ), let url = parseNeteaseUrl(data) { return url }
+            // 备用外链（免费/可试听歌有效，服务端 302 到音频 CDN）：先探测可播放性。
+            if await probeAudio("https://music.163.com/song/media/outer/url?id=\(song.songId).mp3",
+                                headers: ["Referer": "https://music.163.com"]) {
+                return "https://music.163.com/song/media/outer/url?id=\(song.songId).mp3"
+            }
+            return nil
         case "kw":
             guard let data = await get(
                 "http://www.kuwo.cn/api/v1/www/music/playUrl?mid=\(song.songId)&type=music&httpsStatus=1",
@@ -101,6 +138,19 @@ enum BuiltInPlatforms {
         default:
             return nil
         }
+    }
+
+    /// 探测一个 URL 是否真正返回音频（外链接口对不可播的歌回 404/HTML）。
+    static func probeAudio(_ url: String, headers: [String: String]) async -> Bool {
+        guard let u = URL(string: url) else { return false }
+        var req = URLRequest(url: u, timeoutInterval: 8)
+        req.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
+        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
+        guard let (data, resp) = try? await URLSession.shared.data(for: req),
+              let http = resp as? HTTPURLResponse,
+              (200...299).contains(http.statusCode) else { return false }
+        let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
+        return type.contains("audio") || type.contains("octet") || data.count > 512
     }
 
     static func parseNeteaseUrl(_ data: Data) -> String? {
@@ -123,13 +173,27 @@ enum BuiltInPlatforms {
     // 歌词属于展示信息，保留网易云歌词接口作为兜底。
 
     static func lyric(platform: String, song: Song) async -> String? {
-        guard platform == "wy",
-              let data = await get("https://music.163.com/api/song/lyric?id=\(song.songId)&lv=1&kv=1&tv=-1",
-                                   headers: ["Referer": "https://music.163.com"]),
-              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let lrc = root["lrc"] as? [String: Any],
-              let text = lrc["lyric"] as? String, !text.isEmpty else { return nil }
-        return text
+        switch platform {
+        case "wy":
+            guard let data = await get("https://music.163.com/api/song/lyric?id=\(song.songId)&lv=1&kv=1&tv=-1",
+                                       headers: ["Referer": "https://music.163.com"]),
+                  let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let lrc = root["lrc"] as? [String: Any],
+                  let text = lrc["lyric"] as? String, !text.isEmpty else { return nil }
+            return text
+        case "tx":
+            // QQ 音乐歌词（base64 编码），导入音源无歌词时兜底。
+            guard let data = await get(
+                "https://c.y.qq.com/lyric/fcgi-bin/fcg_query_lyric_new.fcg?songmid=\(song.songId)&format=json&g_tk=5381&platform=yqq.json",
+                headers: ["Referer": "https://y.qq.com/"]
+            ), let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+               let b64 = root["lyric"] as? String, !b64.isEmpty,
+               let decoded = Data(base64Encoded: b64),
+               let text = String(data: decoded, encoding: .utf8), !text.isEmpty else { return nil }
+            return text
+        default:
+            return nil
+        }
     }
 
     // MARK: - HTTP

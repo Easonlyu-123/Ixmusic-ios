@@ -13,13 +13,78 @@ final class AppStore: ObservableObject {
     @Published var isPlaying: Bool = false
     /// 播放取链失败提示（洛雪模式：播放一律用导入的音源，失败时告知用户）。
     @Published var playbackNotice: String? = nil
+    /// 最近播放（媒体库「最近播放」），播放成功即记录。
+    @Published var recent: [Song] = []
+    /// 收藏的音乐，播放页可点击红心收藏。
+    @Published var favorites: [Song] = []
 
     let player = AudioPlayer()
     private let runtime = SourceRuntime()
     private let sourcesKey = "luoxue.sources.v1"
+    private let recentKey = "luoxue.recent.v1"
+    private let favoritesKey = "luoxue.favorites.v1"
 
     init() {
         loadSources()
+        loadLibrary()
+    }
+
+    // MARK: - 媒体库（最近播放 / 收藏）
+
+    private func loadLibrary() {
+        if let data = UserDefaults.standard.data(forKey: recentKey),
+           let decoded = try? JSONDecoder().decode([Song].self, from: data) {
+            recent = decoded
+        }
+        if let data = UserDefaults.standard.data(forKey: favoritesKey),
+           let decoded = try? JSONDecoder().decode([Song].self, from: data) {
+            favorites = decoded
+        }
+    }
+
+    private func saveLibrary() {
+        if let data = try? JSONEncoder().encode(recent) {
+            UserDefaults.standard.set(data, forKey: recentKey)
+        }
+        if let data = try? JSONEncoder().encode(favorites) {
+            UserDefaults.standard.set(data, forKey: favoritesKey)
+        }
+    }
+
+    private func sameSong(_ a: Song, _ b: Song) -> Bool {
+        a.source == b.source && a.songId == b.songId
+    }
+
+    /// 记录播放历史：去重置顶，上限 100 条。
+    private func addRecent(_ song: Song) {
+        recent.removeAll { sameSong($0, song) }
+        recent.insert(song, at: 0)
+        if recent.count > 100 { recent = Array(recent.prefix(100)) }
+        saveLibrary()
+    }
+
+    /// 媒体库删除最近播放记录（按偏移集）。
+    func removeRecent(at offsets: IndexSet) {
+        recent.remove(atOffsets: offsets)
+        saveLibrary()
+    }
+
+    /// 测试辅助：直接记录播放历史（play 成功时同样走 addRecent）。
+    func recordRecentForTesting(_ song: Song) {
+        addRecent(song)
+    }
+
+    func toggleFavorite(_ song: Song) {
+        if let idx = favorites.firstIndex(where: { sameSong($0, song) }) {
+            favorites.remove(at: idx)
+        } else {
+            favorites.insert(song, at: 0)
+        }
+        saveLibrary()
+    }
+
+    func isFavorite(_ song: Song) -> Bool {
+        favorites.contains { sameSong($0, song) }
     }
 
     // MARK: - 音源持久化
@@ -72,10 +137,11 @@ final class AppStore: ObservableObject {
         }
         await MainActor.run { self.isSearching = true }
 
-        // 洛雪官方模式：搜索由应用**自带平台音源**完成（网易云/酷我），结果先上屏。
+        // 洛雪官方模式：搜索由应用**自带平台音源**完成（网易云/酷我/QQ音乐），结果先上屏。
         async let builtInWy = BuiltInPlatforms.search(platform: "wy", keyword: q)
         async let builtInKw = BuiltInPlatforms.search(platform: "kw", keyword: q)
-        let builtIn = await builtInWy + builtInKw
+        async let builtInTx = BuiltInPlatforms.search(platform: "tx", keyword: q)
+        let builtIn = await builtInTx + builtInWy + builtInKw
         await MainActor.run { self.searchResults = builtIn }
 
         // 已启用的自定义音源若具备搜索能力（music/search），结果再并入列表。
@@ -122,6 +188,7 @@ final class AppStore: ObservableObject {
             playbackNotice = nil
             player.play(url: url)
             currentSong = song
+            addRecent(song)
             if !playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
                 playlist.append(song)
             }

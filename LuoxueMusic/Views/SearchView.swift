@@ -38,7 +38,7 @@ struct SearchView: View {
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
-            Text("自带网易云 / 酷我平台曲库，导入音源用于播放")
+            Text("自带 QQ音乐 / 网易云 / 酷我平台曲库，导入音源用于播放")
                 .font(.caption)
                 .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
@@ -57,7 +57,7 @@ struct SearchView: View {
     }
 }
 
-/// Apple Music 风格的歌曲行：封面占位 + 标题/歌手两行 + 尾部时长。
+/// Apple Music 风格的歌曲行：**专辑封面** + 标题/歌手两行 + 尾部时长。
 struct SongRow: View {
     let song: Song
     @EnvironmentObject private var store: AppStore
@@ -71,19 +71,40 @@ struct SongRow: View {
         ]
     }
 
+    /// 专辑封面：有 picUrl 用真实封面，否则按歌曲生成稳定的渐变占位图。
+    @ViewBuilder private var artwork: some View {
+        if !song.picUrl.isEmpty, let url = URL(string: song.picUrl) {
+            AsyncImage(url: url) { phase in
+                switch phase {
+                case .success(let image):
+                    image.resizable().scaledToFill()
+                default:
+                    placeholderArt
+                }
+            }
+        } else {
+            placeholderArt
+        }
+    }
+
+    private var placeholderArt: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 6)
+                .fill(LinearGradient(colors: artColors, startPoint: .topLeading, endPoint: .bottomTrailing))
+            Image(systemName: "music.note")
+                .font(.system(size: 16, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
+    }
+
     var body: some View {
         Button {
             store.play(song)
         } label: {
             HStack(spacing: 12) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 6)
-                        .fill(LinearGradient(colors: artColors, startPoint: .topLeading, endPoint: .bottomTrailing))
-                    Image(systemName: "music.note")
-                        .font(.system(size: 16, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
-                }
-                .frame(width: 44, height: 44)
+                artwork
+                    .frame(width: 44, height: 44)
+                    .clipShape(RoundedRectangle(cornerRadius: 6))
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(song.displayTitle)

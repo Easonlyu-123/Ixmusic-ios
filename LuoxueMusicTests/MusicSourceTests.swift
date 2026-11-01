@@ -311,4 +311,66 @@ struct MusicSourceRuntimeTests {
         #expect(BuiltInPlatforms.parseKuwoUrl(json) == "http://other.web.ri01.sycdn.kuwo.cn/x.mp3")
         #expect(BuiltInPlatforms.parseKuwoSongs(Data("not json".utf8)).isEmpty)
     }
+
+    @Test("内置 QQ 音乐搜索结果解析（封面由 albummid 拼接）")
+    func qqSearchParsing() throws {
+        let json = """
+        {"code":0,"data":{"song":{"list":[{
+            "songmid":"0039MnYb0qxYhV","songid":4830342,
+            "songname":"晴天","albumname":"叶惠美","albummid":"002eFUFm2XYZ7z",
+            "interval":269,
+            "singer":[{"name":"周杰伦","mid":"0025NhlN2yWrP4"}]
+        }]}}}
+        """.data(using: .utf8)!
+        let songs = BuiltInPlatforms.parseQQSongs(json)
+        #expect(songs.count == 1)
+        let s = try #require(songs.first)
+        #expect(s.source == "tx")
+        #expect(s.songId == "0039MnYb0qxYhV")
+        #expect(s.title == "晴天")
+        #expect(s.artist == "周杰伦")
+        #expect(s.picUrl == "https://y.gtimg.cn/music/photo_new/T002R300x300M000002eFUFm2XYZ7z.jpg")
+        #expect(s.duration == 269)
+        // 畸形数据安全
+        #expect(BuiltInPlatforms.parseQQSongs(Data("{}".utf8)).isEmpty)
+    }
+
+    @Test("内置平台列表包含 QQ 音乐")
+    func platformListContainsQQ() {
+        #expect(BuiltInPlatforms.all.contains { $0.id == "tx" && $0.name == "QQ音乐" })
+    }
+}
+
+@Suite("媒体库（最近播放 / 收藏）")
+struct MediaLibraryTests {
+    @Test("收藏切换：加→在列表头部；再切→移除")
+    @MainActor
+    func favoriteToggle() async {
+        let store = AppStore()
+        let song = Song(source: "wy", songId: "fav-1", title: "歌", artist: "人",
+                        album: "专", duration: 10, picUrl: "", lrcUrl: "")
+        let before = store.favorites.count
+        store.toggleFavorite(song)
+        #expect(store.isFavorite(song))
+        #expect(store.favorites.first?.songId == "fav-1")
+        store.toggleFavorite(song)
+        #expect(!store.isFavorite(song))
+        #expect(store.favorites.count == before)
+    }
+
+    @Test("重复播放同一首歌去重置顶，且自动进入最近播放")
+    @MainActor
+    func recentDedupAndTop() async {
+        let store = AppStore()
+        let a = Song(source: "kw", songId: "recent-a", title: "A", artist: "x",
+                     album: "", duration: 1, picUrl: "", lrcUrl: "")
+        let b = Song(source: "kw", songId: "recent-b", title: "B", artist: "x",
+                     album: "", duration: 1, picUrl: "", lrcUrl: "")
+        store.removeRecent(at: IndexSet(integersIn: 0..<store.recent.count))
+        store.recordRecentForTesting(a)
+        store.recordRecentForTesting(b)
+        store.recordRecentForTesting(a)
+        #expect(store.recent.map { $0.songId } == ["recent-a", "recent-b"])
+        #expect(store.recent.count == 2)
+    }
 }

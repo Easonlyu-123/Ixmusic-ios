@@ -72,22 +72,30 @@ struct RootTabView: View {
     }
 }
 
-/// 底部玻璃质感的迷你播放条（Apple Music 样式：封面 + 标题 + 播放/下一首）。
+/// 底部玻璃质感的迷你播放条（Apple Music 样式：胶囊形液态玻璃 + 封面 + 标题 + 播放/下一首）。
 struct NowPlayingBar: View {
     @EnvironmentObject private var store: AppStore
 
     var body: some View {
         HStack(spacing: 12) {
-            RoundedRectangle(cornerRadius: 6)
-                .fill(LinearGradient(
-                    colors: [Color.purple.opacity(0.8), Color.blue.opacity(0.7)],
-                    startPoint: .topLeading, endPoint: .bottomTrailing))
-                .frame(width: 42, height: 42)
-                .overlay {
-                    Image(systemName: "music.note")
-                        .font(.system(size: 15, weight: .medium))
-                        .foregroundStyle(.white.opacity(0.9))
+            // 专辑封面（圆形），无封面时用渐变占位。
+            Group {
+                if let pic = store.currentSong?.picUrl, !pic.isEmpty, let url = URL(string: pic) {
+                    AsyncImage(url: url) { phase in
+                        switch phase {
+                        case .success(let image):
+                            image.resizable().scaledToFill()
+                        default:
+                            placeholderCircle
+                        }
+                    }
+                } else {
+                    placeholderCircle
                 }
+            }
+            .frame(width: 42, height: 42)
+            .clipShape(Circle())
+
             VStack(alignment: .leading, spacing: 2) {
                 Text(store.currentSong?.displayTitle ?? "")
                     .font(.subheadline.weight(.medium))
@@ -117,7 +125,22 @@ struct NowPlayingBar: View {
             }
             .buttonStyle(.plain)
         }
-        .padding(10)
-        .glassEffect(.regular, in: RoundedRectangle(cornerRadius: 18))
+        .padding(.horizontal, 14)
+        .padding(.vertical, 10)
+        // 液态玻璃胶囊（Apple Music 迷你条：两端全圆），盖在 Tab 栏上方。
+        .glassEffect(.regular, in: Capsule())
+        .shadow(color: .black.opacity(0.35), radius: 14, x: 0, y: 6)
+    }
+
+    private var placeholderCircle: some View {
+        ZStack {
+            Circle()
+                .fill(LinearGradient(
+                    colors: [Color.purple.opacity(0.8), Color.blue.opacity(0.7)],
+                    startPoint: .topLeading, endPoint: .bottomTrailing))
+            Image(systemName: "music.note")
+                .font(.system(size: 15, weight: .medium))
+                .foregroundStyle(.white.opacity(0.9))
+        }
     }
 }
