@@ -69,12 +69,19 @@ final class AppStore: ObservableObject {
             return
         }
         await MainActor.run { self.isSearching = true }
-        var collected: [Song] = []
-        for src in sources where src.enabled {
+
+        // 洛雪官方模式：搜索由应用**自带平台音源**完成（网易云/酷我）。
+        async let builtInWy = BuiltInPlatforms.search(platform: "wy", keyword: q)
+        async let builtInKw = BuiltInPlatforms.search(platform: "kw", keyword: q)
+        var collected = await builtInWy + builtInKw
+
+        // 已启用的自定义音源若具备搜索能力（music/search），结果并入列表。
+        for src in sources where src.enabled && src.platform != "demo" {
             if let songs = await runtime.search(source: src, query: q) {
                 collected.append(contentsOf: songs)
             }
         }
+
         await MainActor.run {
             self.searchResults = collected
             self.isSearching = false
@@ -83,25 +90,42 @@ final class AppStore: ObservableObject {
 
     // MARK: - 播放
 
+    /// 播放取链顺序（洛雪官方模式）：平台对应音源 → 任意已启用自定义音源 → 自带平台兜底。
     func play(_ song: Song) {
         Task {
-            guard let src = source(for: song) else { return }
-            if let url = await runtime.getUrl(source: src, song: song) {
-                player.play(url: url)
-                await MainActor.run {
-                    self.currentSong = song
-                    if !self.playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
-                        self.playlist.append(song)
-                    }
-                    self.isPlaying = true
+            var url: String?
+            if let src = source(for: song) {
+                url = await runtime.getUrl(source: src, song: song)
+            }
+            if url == nil, let fallback = sources.first(where: { $0.enabled && $0.platform != "demo" }) {
+                // 自定义音源可跨平台取链（洛雪行为）。
+                url = await runtime.getUrl(source: fallback, song: song)
+            }
+            if url == nil {
+                url = await BuiltInPlatforms.playUrl(platform: song.source, song: song)
+            }
+            guard let url else { return }
+            player.play(url: url)
+            await MainActor.run {
+                self.currentSong = song
+                if !self.playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
+                    self.playlist.append(song)
                 }
+                self.isPlaying = true
             }
         }
     }
 
     func lyric(for song: Song) async -> String? {
-        guard let src = source(for: song) else { return nil }
-        return await runtime.getLyric(source: src, song: song)
+        if let src = source(for: song),
+           let text = await runtime.getLyric(source: src, song: song), !text.isEmpty {
+            return text
+        }
+        if let fallback = sources.first(where: { $0.enabled && $0.platform != "demo" }),
+           let text = await runtime.getLyric(source: fallback, song: song), !text.isEmpty {
+            return text
+        }
+        return await BuiltInPlatforms.lyric(platform: song.source, song: song)
     }
 
     /// 播放列表导航（Apple Music 风格的上一首/下一首）。

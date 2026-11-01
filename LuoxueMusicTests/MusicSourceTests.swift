@@ -171,4 +171,52 @@ struct MusicSourceRuntimeTests {
         #expect(first?.first?.title == "a LX")
         #expect(second?.first?.title == "b LX")
     }
+
+    // MARK: - 自带平台音源解析（洛雪官方模式：搜索由应用内置平台完成）
+
+    @Test("内置网易云搜索结果解析")
+    func neteaseSearchParsing() throws {
+        let json = """
+        {"code":200,"result":{"songs":[
+          {"id":186016,"name":"晴天","artists":[{"id":1,"name":"周杰伦"}],
+           "album":{"name":"叶惠美","picUrl":"https://p.example/a.jpg"},"duration":269306},
+          {"id":2,"name":"稻香","artists":[{"name":"周杰伦"},{"name":"其他"}],"album":{"name":"魔杰座"},"duration":223000}
+        ]}}
+        """.data(using: .utf8)!
+        let songs = BuiltInPlatforms.parseNeteaseSongs(json)
+        #expect(songs.count == 2)
+        #expect(songs[0].source == "wy")
+        #expect(songs[0].songId == "186016")
+        #expect(songs[0].title == "晴天")
+        #expect(songs[0].artist == "周杰伦")
+        #expect(songs[0].album == "叶惠美")
+        #expect(songs[0].duration == 269)
+        #expect(songs[0].picUrl == "https://p.example/a.jpg")
+        #expect(songs[1].artist == "周杰伦 / 其他")
+    }
+
+    @Test("内置酷我搜索结果解析")
+    func kuwoSearchParsing() throws {
+        let json = """
+        {"code":200,"success":true,"data":{"total":2,"list":[
+          {"rid":228908,"name":"孤勇者","artist":"陈奕迅","album":"孤勇者","duration":264,"pic":"https://kw.example/b.jpg"},
+          {"mid":"kwx2","songName":"十年","artist":"陈奕迅","albumName":"黑·白·灰","duration":315}
+        ]}}
+        """.data(using: .utf8)!
+        let songs = BuiltInPlatforms.parseKuwoSongs(json)
+        #expect(songs.count == 2)
+        #expect(songs[0].source == "kw")
+        #expect(songs[0].songId == "228908")
+        #expect(songs[0].title == "孤勇者")
+        #expect(songs[0].duration == 264)
+        #expect(songs[1].songId == "kwx2")
+        #expect(songs[1].title == "十年")
+        #expect(songs[1].album == "黑·白·灰")
+    }
+
+    @Test("内置平台解析对空/畸形数据安全")
+    func builtinParsingSafeOnBadData() {
+        #expect(BuiltInPlatforms.parseNeteaseSongs(Data("not json".utf8)).isEmpty)
+        #expect(BuiltInPlatforms.parseKuwoSongs(Data("{}".utf8)).isEmpty)
+    }
 }

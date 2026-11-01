@@ -30,15 +30,17 @@ struct SearchView: View {
     }
 
     private var emptyState: some View {
-        let noSource = !store.sources.contains { $0.enabled }
-        return VStack(spacing: 12) {
-            Image(systemName: noSource ? "square.and.arrow.down" : "music.magnifyingglass")
+        VStack(spacing: 12) {
+            Image(systemName: "music.magnifyingglass")
                 .font(.largeTitle)
                 .foregroundStyle(.secondary)
-            Text(noSource
-                 ? "还没有可用音源，请先到「音源」添加并启用"
-                 : "输入关键词搜索歌曲")
+            Text("输入关键词搜索歌曲")
                 .foregroundStyle(.secondary)
+                .multilineTextAlignment(.center)
+                .padding(.horizontal, 24)
+            Text("自带网易云 / 酷我平台曲库，导入音源用于播放")
+                .font(.caption)
+                .foregroundStyle(.tertiary)
                 .multilineTextAlignment(.center)
                 .padding(.horizontal, 24)
         }
