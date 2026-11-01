@@ -3,6 +3,7 @@ import SwiftUI
 struct SourcesView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showAddSheet = false
+    @State private var showDocumentPicker = false
     @State private var draftScript = ""
     @State private var draftName = ""
 
@@ -78,26 +79,32 @@ struct SourcesView: View {
                 }
             }
         }
+        // 导入面板：与下方文档选择器【平级】，先关它再开选择器，不会嵌套。
         .sheet(isPresented: $showAddSheet) {
             AddSourceSheet(
                 script: $draftScript,
                 name: $draftName,
                 onPickFile: {
-                    // 先关掉导入面板，再（延迟等面板动画结束）从【根 VC】弹出系统文件选择器。
-                    // 不能在面板之上再弹——那样点文件会被底层面板拦截、选不中。
-                    // 选完/取消后再把面板重新打开并回填内容。
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
-                        FileImportCoordinator.shared.present(
-                            onPick: { content, filename in
-                                draftScript = content
-                                if draftName.isEmpty { draftName = filename }
-                                showAddSheet = true
-                            },
-                            onCancel: {
-                                showAddSheet = true
-                            }
-                        )
+                    // AddSourceSheet 内部已 dismiss() 关闭自己，
+                    // 这里只需让 SourcesView 在主体层级弹出系统文件选择器（标准圆圈 + 打开按钮）。
+                    showDocumentPicker = true
+                }
+            )
+        }
+        // 系统文件选择器：由 SwiftUI 在正常主体层级 present，显示标准选择 UI。
+        .sheet(isPresented: $showDocumentPicker) {
+            DocumentPickerView(
+                onPick: { url in
+                    if let content = try? String(contentsOf: url, encoding: .utf8) {
+                        draftScript = content
+                        if draftName.isEmpty { draftName = url.deletingPathExtension().lastPathComponent }
                     }
+                    showDocumentPicker = false
+                    showAddSheet = true
+                },
+                onCancel: {
+                    showDocumentPicker = false
+                    showAddSheet = true
                 }
             )
         }
@@ -127,7 +134,7 @@ struct AddSourceSheet: View {
                         Label("从「文件」导入 .js 音源", systemImage: "doc.badge.plus")
                     }
                 } footer: {
-                    Text("支持从 iPhone「文件」App 选择音源脚本（.js / .txt 均可）。")
+                    Text("弹出系统文件选择器后，每个文件左侧有选择圆圈，选中变蓝，右上角点「打开」即可导入（.js / .txt 均可）。")
                         .font(.caption)
                         .foregroundStyle(.secondary)
                 }
