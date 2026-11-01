@@ -723,8 +723,8 @@ final class SourceRuntime {
         let status = buf.withUnsafeBytes { bufPtr in
             out.withUnsafeMutableBytes { outPtr in
                 SecKeyEncrypt(secKey, SecPadding(rawValue: 0),
-                              bufPtr.baseAddress, buf.count,
-                              outPtr.baseAddress, &outLen)
+                              bufPtr.baseAddress!, buf.count,
+                              outPtr.baseAddress!, &outLen)
             }
         }
         guard status == errSecSuccess else { return nil }
