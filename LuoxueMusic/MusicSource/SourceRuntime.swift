@@ -51,6 +51,9 @@ final class SourceRuntime {
     /// 最近一次动作调用的失败原因（脚本异常 / Promise 拒绝 / 回调报错），用于透传给 UI。
     private(set) var lastActionError: String?
 
+    /// 最近动作调用期间 lx.request 的网络错误（最多留 5 条），用于失败时给出可定位的诊断。
+    private var recentRequestErrors: [String] = []
+
     // 定时器注册表（setTimeout / setInterval）
     private var timerRetain: [Int: JSValue] = [:]
     private var timerActive: [Int: Bool] = [:]
@@ -316,6 +319,7 @@ final class SourceRuntime {
         let ctx = context()
         guard let entry = prepare(ctx, source: source) else { return nil }
         lastActionError = nil
+        recentRequestErrors = []
         var raw: Any?
         if let fn = entry.exports?.objectForKeyedSubscript("getMusicUrl"), isCallable(fn) {
             raw = resolve(fn.call(withArguments: [song.toSourceInfo()]))
@@ -340,7 +344,12 @@ final class SourceRuntime {
                 }
             }
         }
-        return parseUrl(raw)
+        let url = parseUrl(raw)
+        if url == nil, !recentRequestErrors.isEmpty {
+            let detail = "网络请求错误: " + recentRequestErrors.joined(separator: "；")
+            lastActionError = lastActionError.map { "\($0)（\(detail)）" } ?? detail
+        }
+        return url
     }
 
     private func lyricOnMain(source: MusicSource, song: Song) -> String? {
@@ -565,6 +574,9 @@ final class SourceRuntime {
         let executor: @convention(block) (JSValue, JSValue) -> Void = { [weak self] resolve, reject in
             self?.asyncRequestRaw(url: url, options: opts) { err, resp, body in
                 if let err {
+                    if let self, self.recentRequestErrors.count < 5 {
+                        self.recentRequestErrors.append(err)
+                    }
                     _ = reject.call(withArguments: [err])
                 } else {
                     let result: [String: Any] = [
@@ -591,22 +603,18 @@ final class SourceRuntime {
         request.timeoutInterval = 15
         let method = (options["method"] as? String)?.uppercased() ?? "GET"
         var headers = options["headers"] as? [String: Any] ?? [:]
-        var body: Data?
+        var body = Self.requestBody(from: options["body"], headers: &headers)
 
-        switch options["body"] {
-        case let str as String:
-            body = str.data(using: .utf8)
-        case let dict as [String: Any]:
-            body = Self.encodeForm(dict).data(using: .utf8)
-            if headers["Content-Type"] == nil && headers["content-type"] == nil {
-                headers["Content-Type"] = "application/x-www-form-urlencoded"
-            }
-        default: break
-        }
         if body == nil, let form = options["form"] as? [String: Any] {
             body = Self.encodeForm(form).data(using: .utf8)
-            if headers["Content-Type"] == nil && headers["content-type"] == nil {
+            if Self.contentType(in: headers) == nil {
                 headers["Content-Type"] = "application/x-www-form-urlencoded"
+            }
+        }
+        if body == nil, let formData = options["formData"] as? [String: Any] {
+            body = Self.multipartBody(formData)
+            if Self.contentType(in: headers) == nil {
+                headers["Content-Type"] = "multipart/form-data; boundary=lx-form-boundary"
             }
         }
         if let b = body, method == "GET" { request.httpMethod = "POST" } else { request.httpMethod = method }
@@ -631,10 +639,72 @@ final class SourceRuntime {
     }
 
     private func finishRequest(_ callback: JSValue, err: String?, resp: [String: Any]?, body: String?) {
+        if let err, recentRequestErrors.count < 5 {
+            recentRequestErrors.append(err)
+        }
         let errValue: Any = err ?? NSNull()
         let respValue: Any = resp ?? NSNull()
         let bodyValue: Any = body ?? NSNull()
         callback.call(withArguments: [errValue, respValue, bodyValue])
+    }
+
+    // MARK: - lx.request 请求体构造（对齐洛雪移动端契约）
+
+    /// 从 JS 侧的 body 构造原始请求体：
+    /// - 字符串 → UTF-8；
+    /// - Buffer shim（`{__lxbuf, data:[...]}`）/ 纯数字数组 → 原始字节（加密载荷常用）；
+    /// - 字典 → Content-Type 含 json 时 JSON 编码，否则表单编码；
+    /// - 其他数组 → JSON 编码。
+    static func requestBody(from raw: Any?, headers: inout [String: Any]) -> Data? {
+        switch raw {
+        case let str as String:
+            return str.data(using: .utf8)
+        case let dict as [String: Any]:
+            // Buffer shim 被转成普通字典，必须还原为原始字节，绝不能表单编码。
+            if let data = bufferBytes(dict) { return data }            if Self.contentType(in: headers)?.lowercased().contains("json") == true,
+               JSONSerialization.isValidJSONObject(dict),
+               let json = try? JSONSerialization.data(withJSONObject: dict) {
+                return json
+            }
+            return Self.encodeForm(dict).data(using: .utf8)
+        case let arr as [Any]:
+            if !arr.isEmpty, arr.allSatisfy({ $0 is NSNumber }) {
+                return Data(arr.map { UInt8(truncatingIfNeeded: ($0 as! NSNumber).intValue) })
+            }
+            if JSONSerialization.isValidJSONObject(arr),
+               let json = try? JSONSerialization.data(withJSONObject: arr) {
+                return json
+            }
+            return nil
+        default:
+            return nil
+        }
+    }
+
+    /// Buffer shim 字典 → 原始字节（无 __lxbuf 标记则返回 nil）。
+    static func bufferBytes(_ dict: [String: Any]) -> Data? {
+        guard dict["__lxbuf"] != nil,
+              let data = dict["data"] as? [NSNumber] else { return nil }
+        return Data(data.map { UInt8(truncatingIfNeeded: $0.intValue) })
+    }
+
+    private static func contentType(in headers: [String: Any]) -> String? {
+        for (k, v) in headers where k.lowercased() == "content-type" {
+            return "\(v)"
+        }
+        return nil
+    }
+
+    /// 简易 multipart/form-data 编码（lx.request 的 formData 选项）。
+    static func multipartBody(_ fields: [String: Any]) -> Data {
+        let boundary = "--lx-form-boundary"
+        var out = Data()
+        for (key, value) in fields {
+            out.append(Data("\(boundary)\r\nContent-Disposition: form-data; name=\"\(key)\"\r\n\r\n".utf8))
+            out.append(Data("\(value)\r\n".utf8))
+        }
+        out.append(Data("\(boundary)--\r\n".utf8))
+        return out
     }
 
     private static func encodeForm(_ dict: [String: Any]) -> String {

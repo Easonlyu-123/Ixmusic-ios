@@ -339,6 +339,67 @@ struct MusicSourceRuntimeTests {
     func platformListContainsQQ() {
         #expect(BuiltInPlatforms.all.contains { $0.id == "tx" && $0.name == "QQ音乐" })
     }
+
+    @Test("内置 QQ 音乐 vkey 直链解析与请求载荷")
+    func qqVkeyParsing() throws {
+        let payload = BuiltInPlatforms.qqVkeyPayload("0039MnYb0qxYhV")
+        #expect(payload.contains("vkey.GetVkeyServer"))
+        #expect(payload.contains("0039MnYb0qxYhV"))
+
+        let json = """
+        {"code":0,"data":{"req_1":{"code":0,"data":{
+            "sip":["http://dl.stream.qqmusic.qq.com/","http://isure.stream.qqmusic.qq.com/"],
+            "midurlinfo":[{"songmid":"0039MnYb0qxYhV","purl":"M5000039MnYb0qxYhV.mp3?guid=10000"}]
+        }}}}
+        """.data(using: .utf8)!
+        #expect(BuiltInPlatforms.parseQQUrl(json)
+                == "http://dl.stream.qqmusic.qq.com/M5000039MnYb0qxYhV.mp3?guid=10000")
+
+        // VIP/受限歌曲 purl 为空 → 取不到直链
+        let vip = """
+        {"code":0,"data":{"req_1":{"code":0,"data":{
+            "sip":["http://dl.stream.qqmusic.qq.com/"],
+            "midurlinfo":[{"songmid":"xxx","purl":""}]
+        }}}}
+        """.data(using: .utf8)!
+        #expect(BuiltInPlatforms.parseQQUrl(vip) == nil)
+        #expect(BuiltInPlatforms.parseQQUrl(Data("not json".utf8)) == nil)
+    }
+
+    @Test("lx.request 请求体构造：Buffer shim / 字节数组 / 字符串 / JSON")
+    func requestBodyBuilding() throws {
+        // Buffer shim（JS Buffer 对象经 toDictionary 后的形态）必须还原为原始字节。
+        var headers: [String: Any] = ["Content-Type": "application/json"]
+        let bufferDict: [String: Any] = ["__lxbuf": 1, "length": 5,
+                                         "data": [104, 101, 108, 108, 111]] // "hello"
+        let data = try #require(SourceRuntime.requestBody(from: bufferDict, headers: &headers))
+        #expect(Array(data) == [104, 101, 108, 108, 111])
+
+        // 纯数字数组 → 原始字节。
+        var h2: [String: Any] = [:]
+        let arr: [Any] = [1, 2, 255]
+        let arrData = try #require(SourceRuntime.requestBody(from: arr, headers: &h2))
+        #expect(Array(arrData) == [1, 2, 255])
+
+        // 字符串 → UTF-8。
+        var h3: [String: Any] = [:]
+        let strData = try #require(SourceRuntime.requestBody(from: "abc", headers: &h3))
+        #expect(String(data: strData, encoding: .utf8) == "abc")
+
+        // 字典 + JSON Content-Type → JSON 编码；否则表单编码。
+        var jsonHeaders: [String: Any] = ["Content-Type": "application/json"]
+        let dict: [String: Any] = ["a": 1, "b": "x"]
+        let jsonData = try #require(SourceRuntime.requestBody(from: dict, headers: &jsonHeaders))
+        let parsed = try #require(JSONSerialization.jsonObject(with: jsonData) as? [String: Any])
+        #expect(parsed["a"] as? Int == 1)
+        var formHeaders: [String: Any] = [:]
+        let formData = try #require(SourceRuntime.requestBody(from: dict, headers: &formHeaders))
+        #expect(String(data: formData, encoding: .utf8) == "a=1&b=x")
+
+        // 空 body 安全。
+        var h4: [String: Any] = [:]
+        #expect(SourceRuntime.requestBody(from: nil, headers: &h4) == nil)
+    }
 }
 
 @Suite("媒体库（最近播放 / 收藏）")

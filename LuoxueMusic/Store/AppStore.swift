@@ -17,16 +17,30 @@ final class AppStore: ObservableObject {
     @Published var recent: [Song] = []
     /// 收藏的音乐，播放页可点击红心收藏。
     @Published var favorites: [Song] = []
+    /// 主题色（「我的」页设置，持久化）。
+    @Published var accentTheme: AppTheme
+
+    var accentColor: Color { accentTheme.color }
 
     let player = AudioPlayer()
     private let runtime = SourceRuntime()
     private let sourcesKey = "luoxue.sources.v1"
     private let recentKey = "luoxue.recent.v1"
     private let favoritesKey = "luoxue.favorites.v1"
+    private let accentKey = "luoxue.accent.v1"
 
     init() {
+        let saved = UserDefaults.standard.string(forKey: accentKey)
+            .flatMap(AppTheme.init(rawValue:)) ?? AppTheme.defaultTheme
+        _accentTheme = Published(initialValue: saved)
         loadSources()
         loadLibrary()
+    }
+
+    /// 切换主题色并持久化。
+    func setAccentTheme(_ theme: AppTheme) {
+        accentTheme = theme
+        UserDefaults.standard.set(theme.rawValue, forKey: accentKey)
     }
 
     // MARK: - 媒体库（最近播放 / 收藏）
@@ -182,7 +196,8 @@ final class AppStore: ObservableObject {
             guard let url else {
                 let detail = lastError.map { "\n（音源返回：\($0)）" } ?? ""
                 let names = tried.isEmpty ? "" : "\n已尝试音源：\(tried.joined(separator: "、"))"
-                playbackNotice = "「\(song.displayTitle)」暂无法播放\(detail)\(names)\nVIP/版权歌曲需音源支持该平台。"
+                let builtInHint = "（内置平台直链兜底也不可用）"
+                playbackNotice = "「\(song.displayTitle)」暂无法播放\(detail)\(names)\n\(builtInHint)该歌曲可能是 VIP/版权歌曲，需可用音源支持。"
                 return
             }
             playbackNotice = nil

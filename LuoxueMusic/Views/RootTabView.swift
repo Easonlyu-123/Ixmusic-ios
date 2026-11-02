@@ -4,26 +4,23 @@ struct RootTabView: View {
     @EnvironmentObject private var store: AppStore
     @State private var showNowPlaying = false
 
-    /// Apple Music 主题红。
-    static let appleMusicRed = Color(red: 250 / 255.0, green: 35 / 255.0, blue: 59 / 255.0)
-
     var body: some View {
         ZStack {
             backgroundView
-            // 底部栏顺序对齐 Apple Music：资料库在左、搜索在最右，中间为音源管理。
+            // 底部栏顺序对齐 Apple Music：资料库在左、搜索在最右，中间为「我的」（含音源/主题色设置）。
             TabView {
                 LibraryView()
                     .tabItem { Label("资料库", systemImage: "music.note.list") }
 
-                SourcesView()
-                    .tabItem { Label("音源", systemImage: "server.rack") }
+                MineView()
+                    .tabItem { Label("我的", systemImage: "person.crop.circle") }
 
                 SearchView()
                     .tabItem { Label("搜索", systemImage: "magnifyingglass") }
             }
-            .tint(Self.appleMusicRed)
+            .tint(store.accentColor)
         }
-        .tint(Self.appleMusicRed)
+        .tint(store.accentColor)
         .overlay(alignment: .bottom) {
             if store.currentSong != nil {
                 Button {
@@ -51,12 +48,13 @@ struct RootTabView: View {
         }
     }
 
-    /// 深色 + 彩色光晕背景：液态玻璃需要背后有内容才能折射出质感。
+    /// 深色 + 主题色光晕背景：液态玻璃需要背后有内容才能折射出质感。
     private var backgroundView: some View {
-        ZStack {
+        let accent = store.accentColor
+        return ZStack {
             Color(red: 0.04, green: 0.04, blue: 0.08)
             RadialGradient(
-                colors: [Color.purple.opacity(0.45), .clear],
+                colors: [accent.opacity(0.45), .clear],
                 center: .topLeading, startRadius: 50, endRadius: 480
             )
             RadialGradient(
@@ -64,7 +62,7 @@ struct RootTabView: View {
                 center: .bottomTrailing, startRadius: 50, endRadius: 520
             )
             RadialGradient(
-                colors: [Color.pink.opacity(0.28), .clear],
+                colors: [accent.opacity(0.25), .clear],
                 center: .init(x: 0.7, y: 0.35), startRadius: 40, endRadius: 360
             )
         }

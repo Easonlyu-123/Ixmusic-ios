@@ -135,9 +135,51 @@ enum BuiltInPlatforms {
                           "Cookie": "kw_token=lx\(Int.random(in: 100_000...999_999))"]
             ), let url = parseKuwoUrl(data) else { return nil }
             return url
+        case "tx":
+            // QQ 音乐 vkey 接口：非 VIP/非版权受限歌曲可直接取到直链（sip 前缀 + purl）。
+            guard let data = await get(
+                "https://u.y.qq.com/cgi-bin/musicu.fcg?format=json&data=\(qqVkeyPayload(song.songId).urlEncoded)",
+                headers: ["Referer": "https://y.qq.com/",
+                          "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X)"]
+            ), let url = parseQQUrl(data) else { return nil }
+            return url
         default:
             return nil
         }
+    }
+
+    /// QQ 音乐 vkey.GetVkey 请求载荷（免登录，guid 用固定值）。
+    static func qqVkeyPayload(_ songId: String) -> String {
+        let payload: [String: Any] = [
+            "req_1": [
+                "module": "vkey.GetVkeyServer",
+                "method": "CgiGetVkey",
+                "param": [
+                    "guid": "10000",
+                    "songmid": [songId],
+                    "songtype": [0],
+                    "uin": "0",
+                    "loginflag": 1,
+                    "platform": "20"
+                ]
+            ]
+        ]
+        guard let data = try? JSONSerialization.data(withJSONObject: payload),
+              let str = String(data: data, encoding: .utf8) else { return "{}" }
+        return str
+    }
+
+    /// QQ 音乐 vkey 响应解析：data.req_1.data.{sip, midurlinfo[0].purl}。
+    static func parseQQUrl(_ data: Data) -> String? {
+        guard let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let reqData = root["data"] as? [String: Any],
+              let req1 = reqData["req_1"] as? [String: Any],
+              let inner = req1["data"] as? [String: Any],
+              let infos = inner["midurlinfo"] as? [[String: Any]],
+              let purl = infos.first?["purl"] as? String, !purl.isEmpty else { return nil }
+        // sip 是 CDN 前缀（可能多个，取第一个非空），purl 是文件路径。
+        let prefix = (inner["sip"] as? [String])?.first(where: { !$0.isEmpty }) ?? ""
+        return prefix.hasSuffix("/") || purl.hasPrefix("http") ? prefix + purl : prefix + "/" + purl
     }
 
     /// 探测一个 URL 是否真正返回音频（外链接口对不可播的歌回 404/HTML）。

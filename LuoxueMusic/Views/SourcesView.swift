@@ -9,8 +9,8 @@ struct SourcesView: View {
     @State private var draftAuthor = ""
 
     var body: some View {
-        NavigationStack {
-            List {
+        // 由「我的」页的 NavigationStack 推入展示，这里不再自带 NavigationStack。
+        List {
                 Section {
                     HStack(spacing: 10) {
                         Image(systemName: "sparkles")
@@ -79,7 +79,6 @@ struct SourcesView: View {
                     }
                 }
             }
-        }
         // 导入面板：与下方文档选择器【平级】，先关它再开选择器，不会嵌套。
         .sheet(isPresented: $showAddSheet) {
             AddSourceSheet(

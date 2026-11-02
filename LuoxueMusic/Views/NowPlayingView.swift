@@ -49,7 +49,7 @@ struct NowPlayingView: View {
             }
             .padding(.horizontal, 24)
         }
-        .tint(Color(red: 250 / 255.0, green: 35 / 255.0, blue: 59 / 255.0))
+        .tint(store.accentColor)
         .task { await loadLyric() }
     }
 
@@ -178,9 +178,7 @@ struct NowPlayingView: View {
             } label: {
                 Image(systemName: store.isFavorite(song) ? "heart.fill" : "heart")
                     .font(.title3)
-                    .foregroundStyle(store.isFavorite(song)
-                                     ? Color(red: 250 / 255.0, green: 35 / 255.0, blue: 59 / 255.0)
-                                     : Color.primary)
+                    .foregroundStyle(store.isFavorite(song) ? store.accentColor : Color.primary)
             }
             .buttonStyle(.plain)
         }
