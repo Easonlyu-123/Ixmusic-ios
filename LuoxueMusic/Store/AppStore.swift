@@ -222,7 +222,9 @@ final class AppStore: ObservableObject {
     /// 其余已启用音源作为兜底再试一次；演示源跳过。
     private func orderedCandidateSources(for song: Song) -> [MusicSource] {
         let serving = sourcesServing(song.source)
-        let others = sources.filter { $0.enabled && $0.platform != "demo" && !serving.contains($0) }
+        let others = sources.filter { src in
+            src.enabled && src.platform != "demo" && !serving.contains(where: { $0.id == src.id })
+        }
         return serving + others
     }
 
