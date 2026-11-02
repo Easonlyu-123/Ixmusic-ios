@@ -661,7 +661,8 @@ final class SourceRuntime {
             return str.data(using: .utf8)
         case let dict as [String: Any]:
             // Buffer shim 被转成普通字典，必须还原为原始字节，绝不能表单编码。
-            if let data = bufferBytes(dict) { return data }            if Self.contentType(in: headers)?.lowercased().contains("json") == true,
+            if let data = bufferBytes(dict) { return data }
+            if Self.contentType(in: headers)?.lowercased().contains("json") == true,
                JSONSerialization.isValidJSONObject(dict),
                let json = try? JSONSerialization.data(withJSONObject: dict) {
                 return json
