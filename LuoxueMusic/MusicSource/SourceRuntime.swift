@@ -315,6 +315,17 @@ final class SourceRuntime {
         return actions.isEmpty ? nil : actions
     }
 
+    /// 该音源在 `inited.sources` 中声明支持的平台 key 集合（如 ["kw","tx","wy","mg"]）。
+    /// 洛雪契约：一个脚本可服务多个平台，请求里的 source 取具体歌曲的平台。
+    /// 未声明 inited.sources 的老式脚本返回 nil（调用方按兜底逻辑处理）。
+    func declaredPlatforms(source: MusicSource) -> Set<String>? {
+        let ctx = context()
+        guard let entry = prepare(ctx, source: source),
+              let sources = entry.inited?["sources"] as? [String: Any] else { return nil }
+        let keys = sources.keys
+        return keys.isEmpty ? nil : Set(keys)
+    }
+
     private func urlOnMain(source: MusicSource, song: Song) -> String? {
         let ctx = context()
         guard let entry = prepare(ctx, source: source) else { return nil }
@@ -324,6 +335,11 @@ final class SourceRuntime {
         if let fn = entry.exports?.objectForKeyedSubscript("getMusicUrl"), isCallable(fn) {
             raw = resolve(fn.call(withArguments: [song.toSourceInfo()]))
         } else if entry.requestHandler != nil {
+            // 洛雪契约：请求里的 source 是「这首歌所属的平台」（取 song.source），
+            // 一个脚本在 inited.sources 里可声明服务多个平台（kw/kg/tx/wy/mg/local），
+            // 脚本内部用 info.source（即下面传入的 platform）去 apis[source] 取对应平台逻辑。
+            // 不能传音源对象自己的 platform 字段（导入时默认是 "custom"，会导致 apis["custom"] 未定义）。
+            let platform = song.source
             // 按脚本 inited 声明选动作；未声明则按常见顺序尝试。超时给足（取链常含网络往返）。
             let candidates: [(String, TimeInterval)]
             switch declaredUrlActions(entry) {
@@ -335,7 +351,7 @@ final class SourceRuntime {
                 candidates = [("musicUrl", 10), ("music/url", 10), ("getMusicUrl", 6)]
             }
             for (action, t) in candidates {
-                if let r = invokeAction(entry, ctx, platform: source.platform,
+                if let r = invokeAction(entry, ctx, platform: platform,
                                         action: action,
                                         info: ["type": "128k", "musicInfo": song.toSourceInfo()],
                                         timeout: t) {
@@ -600,7 +616,12 @@ final class SourceRuntime {
             return
         }
         var request = URLRequest(url: u)
-        request.timeoutInterval = 15
+        // 尊重洛雪契约里的 timeout（秒）；缺省 15s。
+        if let t = (options["timeout"] as? NSNumber)?.doubleValue, t > 0 {
+            request.timeoutInterval = min(t, 60)
+        } else {
+            request.timeoutInterval = 15
+        }
         let method = (options["method"] as? String)?.uppercased() ?? "GET"
         var headers = options["headers"] as? [String: Any] ?? [:]
         var body = Self.requestBody(from: options["body"], headers: &headers)
@@ -643,7 +664,13 @@ final class SourceRuntime {
             recentRequestErrors.append(err)
         }
         let errValue: Any = err ?? NSNull()
-        let respValue: Any = resp ?? NSNull()
+        // 洛雪契约：回调第二参 resp 是「含 body 的对象」——脚本通用写法为 resolve(resp.body)。
+        // 同时保留第三参 body，以兼容个别写成 (err, resp, body) 三参形式的音源。
+        let respValue: [String: Any] = [
+            "statusCode": resp?["statusCode"] ?? 0,
+            "headers": resp?["headers"] ?? [:],
+            "body": body ?? ""
+        ]
         let bodyValue: Any = body ?? NSNull()
         callback.call(withArguments: [errValue, respValue, bodyValue])
     }
@@ -683,10 +710,18 @@ final class SourceRuntime {
     }
 
     /// Buffer shim 字典 → 原始字节（无 __lxbuf 标记则返回 nil）。
+    /// toDictionary() 把 JS 数组转成 [Any]（元素是 NSNumber），兼容两种形态。
     static func bufferBytes(_ dict: [String: Any]) -> Data? {
-        guard dict["__lxbuf"] != nil,
-              let data = dict["data"] as? [NSNumber] else { return nil }
-        return Data(data.map { UInt8(truncatingIfNeeded: $0.intValue) })
+        guard dict["__lxbuf"] != nil, let raw = dict["data"] else { return nil }
+        let bytes: [Int]
+        if let arr = raw as? [NSNumber] {
+            bytes = arr.map { $0.intValue }
+        } else if let arr = raw as? [Any] {
+            bytes = arr.compactMap { ($0 as? NSNumber)?.intValue }
+        } else {
+            return nil
+        }
+        return Data(bytes.map { UInt8(truncatingIfNeeded: $0) })
     }
 
     private static func contentType(in headers: [String: Any]) -> String? {

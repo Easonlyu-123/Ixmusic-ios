@@ -335,6 +335,41 @@ struct MusicSourceRuntimeTests {
         #expect(BuiltInPlatforms.parseQQSongs(Data("{}".utf8)).isEmpty)
     }
 
+    /// 回归：导入音源（platform 常被填成 "custom"）必须按「歌曲所属平台」路由，
+    /// 即请求里的 source 取 song.source，否则脚本内 apis[source] 取到 undefined 导致全部取链失败。
+    @Test("取链按歌曲平台路由（修复导入音源 platform=custom 取链失败）")
+    func getUrlRoutesBySongPlatform() async {
+        let script = """
+        const { EVENT_NAMES, on, send } = globalThis.lx;
+        const apis = {
+          wy: { musicUrl: (m) => 'https://wylink/' + m.songmid + '.mp3' },
+          kw: { musicUrl: (m) => 'https://kwlinks/' + m.songmid + '.mp3' }
+        };
+        on(EVENT_NAMES.request, ({ source, action, info }) => {
+          if (action !== 'musicUrl') return Promise.reject(new Error('unsupported ' + action));
+          return Promise.resolve(apis[source].musicUrl(info.musicInfo));
+        });
+        send(EVENT_NAMES.inited, { sources: {
+          wy: { name: '网易', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] },
+          kw: { name: '酷我', type: 'music', actions: ['musicUrl'], qualitys: ['128k'] }
+        } });
+        """
+        // 模拟用户导入的音源：platform 填成 "custom"（旧逻辑的 bug 来源）。
+        let source = MusicSource(name: "导入音源", version: "1.0.0", platform: "custom",
+                                 author: "t", script: script, enabled: true)
+        let runtime = SourceRuntime()
+        let wySong = Song(source: "wy", songId: "112233", title: "t", artist: "a",
+                          album: "al", duration: 1, picUrl: "", lrcUrl: "")
+        let kwSong = Song(source: "kw", songId: "445566", title: "t", artist: "a",
+                          album: "al", duration: 1, picUrl: "", lrcUrl: "")
+        let (wyUrl, wyErr) = await runtime.getUrlWithReport(source: source, song: wySong)
+        let (kwUrl, kwErr) = await runtime.getUrlWithReport(source: source, song: kwSong)
+        #expect(wyUrl == "https://wylink/112233.mp3")
+        #expect(wyErr == nil)
+        #expect(kwUrl == "https://kwlinks/445566.mp3")
+        #expect(kwErr == nil)
+    }
+
     @Test("内置平台列表包含 QQ 音乐")
     func platformListContainsQQ() {
         #expect(BuiltInPlatforms.all.contains { $0.id == "tx" && $0.name == "QQ音乐" })

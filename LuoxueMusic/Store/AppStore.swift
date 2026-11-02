@@ -138,7 +138,14 @@ final class AppStore: ObservableObject {
     }
 
     func source(for song: Song) -> MusicSource? {
-        sources.first { $0.platform == song.source }
+        sourcesServing(song.source).first ?? sources.first { $0.platform == song.source }
+    }
+
+    /// 洛雪模型：一个导入音源脚本可在 inited.sources 里声明服务多个平台；
+    /// 返回所有「已启用且声明支持该 platform」的用户音源。
+    func sourcesServing(_ platform: String) -> [MusicSource] {
+        sources.filter { $0.enabled && $0.platform != "demo" }
+            .filter { runtime.declaredPlatforms(source: $0)?.contains(platform) == true }
     }
 
     // MARK: - 搜索
@@ -211,21 +218,20 @@ final class AppStore: ObservableObject {
         }
     }
 
-    /// 取链候选：平台对应的音源优先，随后是其他已启用音源（跳过演示源）。
+    /// 取链候选（洛雪模型）：声明支持本歌平台（song.source）的音源优先，
+    /// 其余已启用音源作为兜底再试一次；演示源跳过。
     private func orderedCandidateSources(for song: Song) -> [MusicSource] {
-        let usable = sources.filter { $0.enabled && $0.platform != "demo" }
-        var ordered: [MusicSource] = []
-        if let matched = usable.first(where: { $0.platform == song.source }) {
-            ordered.append(matched)
-        }
-        ordered += usable.filter { $0.id != ordered.first?.id }
-        return ordered
+        let serving = sourcesServing(song.source)
+        let others = sources.filter { $0.enabled && $0.platform != "demo" && !serving.contains($0) }
+        return serving + others
     }
 
     func lyric(for song: Song) async -> String? {
-        if let src = source(for: song),
-           let text = await runtime.getLyric(source: src, song: song), !text.isEmpty {
-            return text
+        // 优先用声明支持该平台的用户音源取歌词。
+        for src in sourcesServing(song.source) {
+            if let text = await runtime.getLyric(source: src, song: song), !text.isEmpty {
+                return text
+            }
         }
         if let fallback = sources.first(where: { $0.enabled && $0.platform != "demo" }),
            let text = await runtime.getLyric(source: fallback, song: song), !text.isEmpty {
