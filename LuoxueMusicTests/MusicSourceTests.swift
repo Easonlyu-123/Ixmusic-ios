@@ -394,7 +394,9 @@ struct MusicSourceRuntimeTests {
         #expect(parsed["a"] as? Int == 1)
         var formHeaders: [String: Any] = [:]
         let formData = try #require(SourceRuntime.requestBody(from: dict, headers: &formHeaders))
-        #expect(String(data: formData, encoding: .utf8) == "a=1&b=x")
+        // 表单编码顺序不保证，按 key=value 对校验。
+        let pairs = Set((String(data: formData, encoding: .utf8) ?? "").split(separator: "&"))
+        #expect(pairs == ["a=1", "b=x"])
 
         // 空 body 安全。
         var h4: [String: Any] = [:]
