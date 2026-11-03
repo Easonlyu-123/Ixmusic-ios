@@ -3,6 +3,9 @@ import SwiftUI
 
 /// 基于 AVPlayer 的播放器封装，要求在主线程使用（@MainActor）。
 /// 使用 iOS 17+ 的 @Observable，便于 SwiftUI 自动追踪嵌套的播放进度。
+///
+/// 关键修复：音频直链通过 `StreamingAssetLoader` 注入平台所需的 `Referer` 等请求头，
+/// 否则网易云 / 酷我 / QQ 等 CDN 会 403，表现为「页面打开却放不出声音」。
 @MainActor
 @Observable
 final class AudioPlayer {
@@ -10,9 +13,15 @@ final class AudioPlayer {
     var currentTime: Double = 0
     var duration: Double = 0
     var currentURL: String?
+    /// 播放失败原因（如 CDN 403 / 网络错误），用于透传给 UI 提示。
+    var error: String?
 
     private var player: AVPlayer?
+    private var playerItem: AVPlayerItem?
     private var timeObserverToken: Any?
+    private var statusObserver: NSKeyValueObservation?
+    /// 必须强引用：loader 随 asset 的生命周期存活。
+    private var loader: StreamingAssetLoader?
 
     init() {
         configureAudioSession()
@@ -20,19 +29,26 @@ final class AudioPlayer {
 
     private func configureAudioSession() {
         do {
-            try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default)
-            try AVAudioSession.sharedInstance().setActive(true)
+            let session = AVAudioSession.sharedInstance()
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetooth])
+            try session.setActive(true)
         } catch {
             NSLog("LuoxueMusic audio session error: \(error)")
         }
     }
 
-    func play(url: String) {
+    /// 播放音频直链；headers 为各平台 CDN 所需的请求头（Referer 等）。
+    func play(url: String, headers: [String: String] = [:]) {
         guard let u = URL(string: url) else { return }
-        removeTimeObserver()
-        let item = AVPlayerItem(url: u)
+        error = nil
+        cleanupItem()
+        let wrapped = StreamingAssetLoader.makeAsset(url: u, headers: headers)
+        let item = AVPlayerItem(asset: wrapped.asset)
+        self.loader = wrapped.loader
+        self.playerItem = item
         player = AVPlayer(playerItem: item)
         addTimeObserver(for: item)
+        observeStatus(item)
         player?.play()
         isPlaying = true
         currentURL = url
@@ -51,7 +67,7 @@ final class AudioPlayer {
 
     func stop() {
         player?.pause()
-        removeTimeObserver()
+        cleanupItem()
         player = nil
         isPlaying = false
         currentTime = 0
@@ -63,6 +79,18 @@ final class AudioPlayer {
         player?.seek(to: CMTime(seconds: s, preferredTimescale: 600))
         // 立即回写进度，松手滑块不回跳，时间标签同步。
         currentTime = s
+    }
+
+    // MARK: - 内部
+
+    private func cleanupItem() {
+        removeTimeObserver()
+        statusObserver?.invalidate()
+        statusObserver = nil
+        playerItem = nil
+        // 先断开 session（打破 URLSession→delegate 循环引用），再释放 loader。
+        loader?.invalidate()
+        loader = nil
     }
 
     private func addTimeObserver(for item: AVPlayerItem) {
@@ -83,6 +111,18 @@ final class AudioPlayer {
         if let token = timeObserverToken {
             player?.removeTimeObserver(token)
             timeObserverToken = nil
+        }
+    }
+
+    /// 监听播放条目状态：失败时把原因写入 `error` 以便 UI 提示。
+    private func observeStatus(_ item: AVPlayerItem) {
+        statusObserver = item.observe(\.status, options: [.new]) { [weak self] observed, _ in
+            guard let self else { return }
+            if observed.status == .failed {
+                let reason = (observed.error as NSError?)?.localizedDescription
+                    ?? "未知错误（可能是音源直链需要权限 / 已失效）"
+                Task { @MainActor in self.error = reason }
+            }
         }
     }
 }

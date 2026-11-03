@@ -208,13 +208,37 @@ final class AppStore: ObservableObject {
                 return
             }
             playbackNotice = nil
-            player.play(url: url)
+            // 各平台 CDN 直链需要对应 Referer 才能播放（AVPlayer 默认不带）。
+            let headers = Self.audioHeaders(for: song.source, url: url)
+            player.play(url: url, headers: headers)
             currentSong = song
             addRecent(song)
             if !playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
                 playlist.append(song)
             }
             isPlaying = true
+            // 数秒后若 AVPlayer 仍然报错（如 403 / 直链失效），把原因透传给 UI。
+            Task { @MainActor in
+                try? await Task.sleep(nanoseconds: 4_000_000_000)
+                if let err = self.player.error, !err.isEmpty {
+                    self.playbackNotice = "「\(song.displayTitle)」播放失败：\(err)"
+                }
+            }
+        }
+    }
+
+    /// 各平台音频 CDN 所需的请求头（Referer 等）。导入音源等未知平台用同域名 Referer 兜底。
+    static func audioHeaders(for source: String, url: String) -> [String: String] {
+        let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
+        switch source {
+        case "wy": return ["Referer": "https://music.163.com", "User-Agent": ua]
+        case "kw": return ["Referer": "http://www.kuwo.cn/", "User-Agent": ua]
+        case "tx": return ["Referer": "https://y.qq.com/", "User-Agent": ua]
+        default:
+            if let host = URL(string: url)?.host {
+                return ["Referer": "https://\(host)/", "User-Agent": ua]
+            }
+            return ["User-Agent": ua]
         }
     }
 

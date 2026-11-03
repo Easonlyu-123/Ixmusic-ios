@@ -38,6 +38,8 @@ struct RootTabView: View {
                 NowPlayingView(song: song)
             }
         }
+        .presentationDetents([.large])
+        .presentationDragIndicator(.hidden)
         .alert("播放失败", isPresented: Binding(
             get: { store.playbackNotice != nil },
             set: { if !$0 { store.playbackNotice = nil } }

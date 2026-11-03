@@ -50,6 +50,8 @@ struct NowPlayingView: View {
             .padding(.horizontal, 24)
         }
         .tint(store.accentColor)
+        // 钉死整页尺寸，避免专辑图加载后把页面「撑大」导致溢出裁切。
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await loadLyric() }
     }
 
@@ -66,6 +68,8 @@ struct NowPlayingView: View {
                         image.resizable().scaledToFill()
                     }
                 }
+                // 约束尺寸，避免原图固有尺寸把整页「撑大」造成溢出裁切。
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
                 .blur(radius: 72)
                 .opacity(showLyrics ? 0.5 : 0.32)
                 .scaleEffect(1.25)

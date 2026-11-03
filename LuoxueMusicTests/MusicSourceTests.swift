@@ -472,3 +472,27 @@ struct MediaLibraryTests {
         #expect(store.recent.count == 2)
     }
 }
+
+@Suite("播放器：CDN 请求头注入与流加载")
+struct PlayerHeadersTests {
+
+    @Test("各平台音频直链所需 Referer 映射正确")
+    func audioHeadersByPlatform() {
+        #expect(AppStore.audioHeaders(for: "wy", url: "https://x/1.mp3")["Referer"] == "https://music.163.com")
+        #expect(AppStore.audioHeaders(for: "kw", url: "https://x/1.mp3")["Referer"] == "http://www.kuwo.cn/")
+        #expect(AppStore.audioHeaders(for: "tx", url: "https://x/1.mp3")["Referer"] == "https://y.qq.com/")
+        // 未知平台用同域名 Referer 兜底。
+        let fallback = AppStore.audioHeaders(for: "custom", url: "https://cdn.example.com/1.mp3")
+        #expect(fallback["Referer"] == "https://cdn.example.com/")
+        #expect(fallback["User-Agent"]?.contains("iPhone") == true)
+    }
+
+    @Test("音频直链改写成自定义 scheme 以触发流加载器注入请求头")
+    func assetSchemeRewrite() {
+        let url = URL(string: "https://m7.music.126.net/x.mp3")!
+        let wrapped = StreamingAssetLoader.makeAsset(url: url, headers: ["Referer": "https://music.163.com"])
+        #expect(wrapped.asset.url.scheme == StreamingAssetLoader.scheme)
+        #expect(wrapped.asset.url.absoluteString.contains("m7.music.126.net"))
+        #expect(wrapped.loader.headers["Referer"] == "https://music.163.com")
+    }
+}
