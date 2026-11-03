@@ -228,7 +228,8 @@ final class AppStore: ObservableObject {
     }
 
     /// 各平台音频 CDN 所需的请求头（Referer 等）。导入音源等未知平台用同域名 Referer 兜底。
-    static func audioHeaders(for source: String, url: String) -> [String: String] {
+    /// 纯函数，不依赖实例状态，标记为 nonisolated 以便测试等非主线程上下文直接调用。
+    nonisolated static func audioHeaders(for source: String, url: String) -> [String: String] {
         let ua = "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15"
         switch source {
         case "wy": return ["Referer": "https://music.163.com", "User-Agent": ua]
