@@ -87,7 +87,6 @@ final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate, URLSe
             cir.contentType = response.mimeType ?? "audio/mpeg"
             cir.contentLength = response.expectedContentLength
         }
-        cir.response = response
         completionHandler(.allow)
     }
 
