@@ -13,7 +13,7 @@ final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate, URLSe
     static let scheme = "lxstream"
 
     let headers: [String: String]
-    private let session: URLSession
+    private var session: URLSession!
     private var pending: [URLSessionTask: AVAssetResourceLoadingRequest] = [:]
     private let lock = NSLock()
 
