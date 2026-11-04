@@ -81,13 +81,31 @@ final class StreamingAssetLoader: NSObject, AVAssetResourceLoaderDelegate, URLSe
         guard let req, let cir = req.contentInformationRequest else { completionHandler(.allow); return }
         if let http = response as? HTTPURLResponse {
             cir.contentType = http.mimeType ?? "audio/mpeg"
-            cir.contentLength = http.expectedContentLength
-            cir.isByteRangeAccessSupported = (http.value(forHTTPHeaderField: "Accept-Ranges")?.contains("bytes") ?? false) || http.statusCode == 206
+            // 关键：分片响应（206）里 expectedContentLength 只是本分片长度，
+            // 真实总时长在 `Content-Range: bytes 0-1/<TOTAL>` 的“/”之后。若直接用 expectedContentLength，
+            // AVPlayer 会以为整首只有几字节 → 瞬间“播完”、没声音、进度不动。
+            if http.statusCode == 206,
+               let cr = http.value(forHTTPHeaderField: "Content-Range"),
+               let total = Self.parseContentRangeTotal(cr) {
+                cir.contentLength = total
+            } else {
+                cir.contentLength = http.expectedContentLength
+            }
+            cir.isByteRangeAccessSupported = (http.value(forHTTPHeaderField: "Accept-Ranges")?.contains("bytes") ?? false)
+                || http.statusCode == 206
         } else {
             cir.contentType = response.mimeType ?? "audio/mpeg"
             cir.contentLength = response.expectedContentLength
         }
         completionHandler(.allow)
+    }
+
+    /// 解析 `Content-Range: bytes 0-1/2595151` 中的真实总字节数（用于 206 分片响应）。
+    static func parseContentRangeTotal(_ header: String) -> Int64? {
+        let parts = header.components(separatedBy: "/")
+        guard parts.count == 2,
+              let total = Int64(parts[1].trimmingCharacters(in: .whitespaces)) else { return nil }
+        return total > 0 ? total : nil
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive data: Data) {

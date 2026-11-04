@@ -53,6 +53,14 @@ struct NowPlayingView: View {
         // 钉死整页尺寸，避免专辑图加载后把页面「撑大」导致溢出裁切。
         .frame(maxWidth: .infinity, maxHeight: .infinity)
         .task { await loadLyric() }
+        .alert("播放失败", isPresented: Binding(
+            get: { store.playbackNotice != nil },
+            set: { if !$0 { store.playbackNotice = nil } }
+        )) {
+            Button("好", role: .cancel) { store.playbackNotice = nil }
+        } message: {
+            Text(store.playbackNotice ?? "")
+        }
     }
 
     // MARK: - 背景：封面放大模糊（歌词页更浓，Apple Music 的模糊底色效果）

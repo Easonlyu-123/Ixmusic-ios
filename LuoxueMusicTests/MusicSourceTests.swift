@@ -437,6 +437,17 @@ struct MusicSourceRuntimeTests {
         var h4: [String: Any] = [:]
         #expect(SourceRuntime.requestBody(from: nil, headers: &h4) == nil)
     }
+
+    /// 回归：AVPlayer 先用 bytes=0-1 探测，CDN 返回 206 + Content-Range，
+    /// 必须从「/」后解析真实总字节数，否则 contentLength 被设成 2 导致「放不出声音 / 进度不动」。
+    @Test("解析 206 Content-Range 的真实总字节数")
+    func parseContentRangeTotal() {
+        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 0-1/2595151") == 2595151)
+        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 100-200/999") == 999)
+        // 缺省 / 畸形 → nil（回退到 expectedContentLength）。
+        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 0-1") == nil)
+        #expect(StreamingAssetLoader.parseContentRangeTotal("garbage") == nil)
+    }
 }
 
 @Suite("媒体库（最近播放 / 收藏）")

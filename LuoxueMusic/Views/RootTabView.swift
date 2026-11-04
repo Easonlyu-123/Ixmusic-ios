@@ -33,13 +33,11 @@ struct RootTabView: View {
                 .buttonStyle(.plain)
             }
         }
-        .sheet(isPresented: $showNowPlaying) {
+        .fullScreenCover(isPresented: $showNowPlaying) {
             if let song = store.currentSong {
                 NowPlayingView(song: song)
             }
         }
-        .presentationDetents([.large])
-        .presentationDragIndicator(.hidden)
         .alert("播放失败", isPresented: Binding(
             get: { store.playbackNotice != nil },
             set: { if !$0 { store.playbackNotice = nil } }
