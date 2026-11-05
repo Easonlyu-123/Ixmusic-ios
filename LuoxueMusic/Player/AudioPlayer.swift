@@ -33,7 +33,7 @@ final class AudioPlayer {
     private func configureAudioSession() {
         do {
             let session = AVAudioSession.sharedInstance()
-            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetooth])
+            try session.setCategory(.playback, mode: .default, options: [.allowAirPlay, .allowBluetoothHFP])
             try session.setActive(true)
         } catch {
             NSLog("LuoxueMusic audio session error: \(error)")
@@ -56,7 +56,8 @@ final class AudioPlayer {
 
     /// 用带请求头的 AVURLAsset 直接流式播放（最稳，无需下载）。
     private func startStreaming(url: URL, headers: [String: String]) {
-        let options = headers.isEmpty ? nil : [AVURLAssetHTTPHeaderFieldsKey: headers]
+        // 注意：当前 SDK 未暴露 AVURLAssetHTTPHeaderFieldsKey 符号，改用其字符串字面量。
+        let options: [String: Any]? = headers.isEmpty ? nil : ["AVURLAssetHTTPHeaderFieldsKey": headers]
         let asset = AVURLAsset(url: url, options: options)
         let item = AVPlayerItem(asset: asset)
         playerItem = item
