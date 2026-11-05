@@ -27,8 +27,8 @@ struct NowPlayingView: View {
 
     var body: some View {
         GeometryReader { geo in
-            // 封面固定为正方形，且不超过「屏宽 - 边距」与「屏高约 46%」二者较小值，
-            // 保证任何机型下都不会把整页撑变形 / 溢出裁切。
+            // 封面固定为正方形，且不超过「屏宽 - 边距」与「屏高约 46%」二者较小值。
+            // 用 geo.size 计算：GeometryReader 贪婪占满，尺寸稳定，不会因专辑图加载而触发重算导致整页变形。
             let artSize = max(0, min(geo.size.width - 48, geo.size.height * 0.46))
             ZStack {
                 blurredBackdrop
@@ -54,15 +54,19 @@ struct NowPlayingView: View {
                     }
                 }
                 .padding(.horizontal, 24)
+                // 关键：padding 用 geo.safeAreaInsets（此时非零），让顶栏落到状态栏下方、可点击。
                 .padding(.top, geo.safeAreaInsets.top)
                 .padding(.bottom, geo.safeAreaInsets.bottom)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        .tint(store.accentColor)
+        // 关键修复：.ignoresSafeArea() 必须放在 GeometryReader 的「外层容器」上，
+        // 否则直接加在 GeometryReader 会让 geo.safeAreaInsets 变成 0，顶栏被状态栏遮挡。
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
         .ignoresSafeArea()
+        .tint(store.accentColor)
         .task { await loadLyric() }
-        // 下载音频期间的加载态（本地播放前先下完，避免「点开就放」的错觉）。
+        // 流式起播缓冲 / 回退下载期间的加载态。
         .overlay(alignment: .center) {
             if store.player.isLoading {
                 ProgressView("音频加载中…")
@@ -95,15 +99,16 @@ struct NowPlayingView: View {
                         image.resizable().scaledToFill()
                     }
                 }
-                // 约束尺寸，避免原图固有尺寸把整页「撑大」造成溢出裁切。
+                // 约束尺寸，并裁剪掉放大后的溢出部分，避免专辑图加载后把整页横向撑大。
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .blur(radius: 72)
-                .opacity(showLyrics ? 0.5 : 0.32)
                 .scaleEffect(1.25)
+                .blur(radius: 64)
+                .opacity(showLyrics ? 0.5 : 0.32)
             }
             Color.black.opacity(showLyrics ? 0.35 : 0.1)
         }
         .ignoresSafeArea()
+        .clipped()
         .animation(.easeInOut(duration: 0.45), value: showLyrics)
     }
 

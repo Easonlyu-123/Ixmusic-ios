@@ -3,10 +3,10 @@ import SwiftUI
 
 /// 基于 AVPlayer 的播放器封装，要求在主线程使用（@MainActor）。
 ///
-/// 关键设计：各平台 CDN 直链（网易云 / 酷我 / QQ）常要求带 `Referer` 等请求头，
-/// 且 `AVAssetResourceLoader` 在侧载 / 未签名环境下极不稳定（多次迭代均出现“能打开但放不出 / 报错”）。
-/// 因此改为「先把音频用带头的 URLSession 下载到本地缓存，再用 AVPlayer 播放本地文件」，
-/// 既兼容各 CDN 的头部要求，又完全绕开资源加载器拦截的坑，播放最稳定；同一首歌二次播放直接读缓存。
+/// 播放机制（对齐洛雪移动端的做法）：
+/// 1. 优先用带请求头（Referer 等）的 `AVURLAsset` 直接**流式播放**——这是 iOS 上最稳的方式，
+///    不需要把整首歌下载完再播，也不需要脆弱的自定义 scheme 拦截。
+/// 2. 若流式因部分 CDN 需要逐请求头部而失败，自动回退到「带头部下载到本地，再播本地文件」。
 @MainActor
 @Observable
 final class AudioPlayer {
@@ -14,19 +14,17 @@ final class AudioPlayer {
     var currentTime: Double = 0
     var duration: Double = 0
     var currentURL: String?
-    /// 是否正在下载音频（用于 UI 显示加载态）。
+    /// 是否正在加载音频（流式起播前的缓冲 / 回退下载）。
     var isLoading = false
-    /// 播放失败原因（如下载失败 / 本地文件损坏），用于透传给 UI 提示。
+    /// 播放失败原因，用于透传给 UI 提示。
     var error: String?
 
     private var player: AVPlayer?
     private var playerItem: AVPlayerItem?
     private var timeObserverToken: Any?
     private var statusObserver: NSKeyValueObservation?
-    /// 下载器（强引用；随 AudioPlayer 生命周期存活）。
-    private let downloader = AudioFileDownloader()
-    /// 当前加载任务，切歌时取消上一次。
-    private var loadTask: Task<Void, Never>?
+    /// 当前播放请求（流式失败后的本地回退下载用）。
+    private var pendingRequest: (url: URL, headers: [String: String])?
 
     init() {
         configureAudioSession()
@@ -44,45 +42,35 @@ final class AudioPlayer {
 
     /// 播放音频直链；headers 为各平台 CDN 所需的请求头（Referer 等）。
     ///
-    /// 流程：下载到本地缓存 → AVPlayer 播放本地文件。下载中若切歌，上一次任务会被取消。
+    /// 流程：带头部流式播放 →（失败）回退到「下载到本地再播放」。
     func play(url: String, headers: [String: String] = [:]) {
-        guard let u = URL(string: url) else {
+        guard let u = URL(string: url), (u.scheme == "http" || u.scheme == "https") else {
             error = "无效的音频地址"
             return
         }
         error = nil
         isLoading = true
-        loadTask?.cancel()
-        let downloader = self.downloader
-        loadTask = Task { [weak self] in
-            do {
-                let localURL = try await Self.cachedOrDownload(u, headers: headers, downloader: downloader)
-                try Task.checkCancellation()
-                guard let self else { return }
-                await MainActor.run {
-                    self.isLoading = false
-                    let item = AVPlayerItem(url: localURL)
-                    self.playerItem = item
-                    self.player = AVPlayer(playerItem: item)
-                    self.addTimeObserver(for: item)
-                    self.observeStatus(item)
-                    self.player?.play()
-                    self.isPlaying = true
-                    self.currentURL = url
-                }
-            } catch is CancellationError {
-                await MainActor.run { self?.isLoading = false }
-            } catch {
-                await MainActor.run {
-                    self?.isLoading = false
-                    self?.error = "音频加载失败：\(error.localizedDescription)"
-                }
-            }
-        }
+        pendingRequest = (u, headers)
+        startStreaming(url: u, headers: headers)
+    }
+
+    /// 用带请求头的 AVURLAsset 直接流式播放（最稳，无需下载）。
+    private func startStreaming(url: URL, headers: [String: String]) {
+        let options = headers.isEmpty ? nil : [AVURLAssetHTTPHeaderFieldsKey: headers]
+        let asset = AVURLAsset(url: url, options: options)
+        let item = AVPlayerItem(asset: asset)
+        playerItem = item
+        player = AVPlayer(playerItem: item)
+        addTimeObserver(for: item)
+        observeStreamStatus(item)
+        isLoading = false
+        player?.play()
+        isPlaying = true
+        currentURL = url.absoluteString
     }
 
     func togglePlayPause() {
-        guard let player = player else { return }
+        guard let player else { return }
         if player.timeControlStatus == .playing {
             player.pause()
             isPlaying = false
@@ -118,6 +106,7 @@ final class AudioPlayer {
     }
 
     private func addTimeObserver(for item: AVPlayerItem) {
+        removeTimeObserver()
         timeObserverToken = player?.addPeriodicTimeObserver(
             forInterval: CMTime(seconds: 0.5, preferredTimescale: 600),
             queue: .main
@@ -138,134 +127,62 @@ final class AudioPlayer {
         }
     }
 
-    /// 监听播放条目状态：失败时把原因写入 `error` 以便 UI 提示。
-    private func observeStatus(_ item: AVPlayerItem) {
+    /// 监听流式条目的状态：失败时回退到本地下载播放。
+    private func observeStreamStatus(_ item: AVPlayerItem) {
         statusObserver = item.observe(\.status, options: [.new]) { [weak self] observed, _ in
             guard let self else { return }
             if observed.status == .failed {
                 let reason = (observed.error as NSError?)?.localizedDescription
-                    ?? "未知错误（可能是音频文件已失效或本地播放异常）"
-                Task { @MainActor in self.error = reason }
+                    ?? "未知错误（可能是该直链失效或需要登录 Cookie）"
+                Task { @MainActor in await self.fallbackToLocal(reason: reason) }
             }
         }
     }
 
-    // MARK: - 本地缓存
-
-    /// 优先返回已缓存的本地音频；否则下载后落盘再返回。
-    private static func cachedOrDownload(_ url: URL, headers: [String: String],
-                                         downloader: AudioFileDownloader) async throws -> URL {
-        let cached = cacheFileURL(for: url)
-        if FileManager.default.fileExists(atPath: cached.path),
-           let sz = try? FileManager.default.attributesOfItem(atPath: cached.path)[.size] as? UInt64,
-           sz > 1024 {
-            return cached
+    /// 流式失败后的兜底：带头部把音频下载到本地，再用 AVPlayer 播放本地文件。
+    private func fallbackToLocal(reason: String) async {
+        guard let (url, headers) = pendingRequest else {
+            self.error = "播放失败：\(reason)"
+            return
         }
-        let tmp = try await downloader.fetch(url, headers: headers)
-        try? FileManager.default.removeItem(at: cached)
-        try FileManager.default.moveItem(at: tmp, to: cached)
-        return cached
-    }
-
-    private static func cacheFileURL(for url: URL) -> URL {
-        let base = (FileManager.default.urls(for: .cachesDirectory, in: .userDomainMask).first
-                    ?? FileManager.default.temporaryDirectory)
-            .appendingPathComponent("luoxue_audio", isDirectory: true)
-        try? FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
-        let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
-        return base.appendingPathComponent(stableName(url.absoluteString) + ".\(ext)")
-    }
-
-    /// 由字符串稳定派生文件名（FNV-1a 64 位），跨启动一致。内部可见以便单元测试。
-    nonisolated static func stableName(_ key: String) -> String {
-        let data = Data(key.utf8)
-        var hash: UInt64 = 0xcbf29ce484222325
-        for b in data {
-            hash ^= UInt64(b)
-            hash = hash &* 0x100000001b3
-        }
-        return String(format: "%016llx", hash)
-    }
-}
-
-/// 带自定义请求头（含 302 重定向时保持头部）的音频下载器，把远程直链落到本地临时文件。
-///
-/// 之所以单独成类：URLSession 的下载委托需要 NSObject 子类；重定向时网易云 / 酷我 / QQ 的 CDN
-/// 仍要求带 Referer，需在 `willPerformHTTPRedirection` 里把注入的头部重新写回新请求。
-private final class AudioFileDownloader: NSObject, URLSessionDownloadDelegate {
-    private var session: URLSession!
-    private var headers: [String: String] = [:]
-    /// 当前在飞的下载 id（用于忽略上一次已取消的回调）。
-    private var activeID: UUID?
-    /// 每个下载 id 对应一个 continuation。
-    private var pending: [UUID: CheckedContinuation<URL, Error>] = [:]
-
-    override init() {
-        super.init()
-        session = makeSession()
-    }
-
-    private func makeSession() -> URLSession {
-        let cfg = URLSessionConfiguration.ephemeral
-        cfg.httpMaximumConnectionsPerHost = 2
-        cfg.timeoutIntervalForRequest = 30
-        cfg.timeoutIntervalForResource = 120
-        cfg.waitsForConnectivity = false
-        return URLSession(configuration: cfg, delegate: self, delegateQueue: nil)
-    }
-
-    /// 下载音频到本地临时文件，返回本地文件 URL。重复调用会取消上一次仍在进行的下载。
-    func fetch(_ url: URL, headers: [String: String]) async throws -> URL {
-        // 取消上一次未完成的下载：先把它的 continuation 以取消错误结束，再作废旧 session。
-        if let prev = activeID, let cont = pending.removeValue(forKey: prev) {
-            cont.resume(throwing: CancellationError())
-        }
-        session.invalidateAndCancel()
-        session = makeSession()
-        self.headers = headers
-
-        let id = UUID()
-        activeID = id
-        return try await withCheckedThrowingContinuation { cont in
-            pending[id] = cont
-            var req = URLRequest(url: url, timeoutInterval: 60)
-            for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
-            session.downloadTask(with: req).resume()
-        }
-    }
-
-    private func finish(_ id: UUID, _ result: Result<URL, Error>) {
-        guard let cont = pending.removeValue(forKey: id) else { return }
-        cont.resume(with: result)
-    }
-
-    // MARK: - URLSessionDownloadDelegate
-
-    func urlSession(_ session: URLSession, downloadTask: URLSessionDownloadTask, didFinishDownloadingTo location: URL) {
-        guard let id = activeID else { return }
-        let ext = (downloadTask.response?.url?.pathExtension).flatMap { $0.isEmpty ? nil : $0 } ?? "mp3"
-        let dest = FileManager.default.temporaryDirectory
-            .appendingPathComponent("lx_\(UUID().uuidString).\(ext)")
-        try? FileManager.default.removeItem(at: dest)
+        // 已被新的播放请求取代，放弃本次回退。
+        let expected = url
+        isLoading = true
         do {
-            try FileManager.default.moveItem(at: location, to: dest)
-            finish(id, .success(dest))
+            let local = try await downloadToLocal(url, headers: headers)
+            guard pendingRequest?.url == expected else { return }
+            let item = AVPlayerItem(url: local)
+            playerItem = item
+            player = AVPlayer(playerItem: item)
+            addTimeObserver(for: item)
+            // 本地播放若仍失败，直接报错（不再二次回退）。
+            statusObserver = item.observe(\.status, options: [.new]) { [weak self] observed, _ in
+                guard let self, observed.status == .failed else { return }
+                let r = (observed.error as NSError?)?.localizedDescription ?? "未知错误"
+                Task { @MainActor in self.error = "播放失败：\(r)" }
+            }
+            player?.play()
+            isPlaying = true
+            error = nil
         } catch {
-            finish(id, .failure(error))
+            self.error = "播放失败：\(reason)；本地回退也失败：\(error.localizedDescription)"
         }
+        isLoading = false
     }
 
-    func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
-        guard let id = activeID, let error else { return }
-        finish(id, .failure(error))
-    }
-
-    func urlSession(_ session: URLSession, task: URLSessionTask,
-                    willPerformHTTPRedirection response: HTTPURLResponse,
-                    newRequest request: URLRequest,
-                    completionHandler: @escaping (URLRequest?) -> Void) {
-        var r = request
-        for (k, v) in headers { r.setValue(v, forHTTPHeaderField: k) }
-        completionHandler(r)
+    /// 带请求头把音频下载到本地临时文件（流式失败时的回退路径）。
+    private func downloadToLocal(_ url: URL, headers: [String: String]) async throws -> URL {
+        var req = URLRequest(url: url, timeoutInterval: 60)
+        for (k, v) in headers { req.setValue(v, forHTTPHeaderField: k) }
+        let (data, resp) = try await URLSession.shared.data(for: req)
+        if let http = resp as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+            throw NSError(domain: "LuoxueMusic", code: http.statusCode,
+                          userInfo: [NSLocalizedDescriptionKey: "下载返回 HTTP \(http.statusCode)"])
+        }
+        let ext = url.pathExtension.isEmpty ? "mp3" : url.pathExtension
+        let tmp = FileManager.default.temporaryDirectory
+            .appendingPathComponent("lx_\(UUID().uuidString).\(ext)")
+        try data.write(to: tmp)
+        return tmp
     }
 }

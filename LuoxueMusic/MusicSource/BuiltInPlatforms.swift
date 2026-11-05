@@ -117,17 +117,19 @@ enum BuiltInPlatforms {
     static func playUrl(platform: String, song: Song) async -> String? {
         switch platform {
         case "wy":
+            // 免费外链最稳：无需 Cookie，服务端 302 跳转到音频 CDN 直链（实测可下到完整音频）。
+            // 官方 enhance/player/url 接口现已对无 Cookie 请求返回验证拦截（code -462），仅作兜底。
+            let outer = "https://music.163.com/song/media/outer/url?id=\(song.songId).mp3"
+            if await probeAudio(outer, headers: ["Referer": "https://music.163.com"]) {
+                return outer
+            }
             if let data = await postForm(
                 "https://music.163.com/api/song/enhance/player/url",
                 form: ["ids": "[\(song.songId)]", "br": "320000"],
                 headers: ["Referer": "https://music.163.com"]
             ), let url = parseNeteaseUrl(data) { return url }
-            // 备用外链（免费/可试听歌有效，服务端 302 到音频 CDN）：先探测可播放性。
-            if await probeAudio("https://music.163.com/song/media/outer/url?id=\(song.songId).mp3",
-                                headers: ["Referer": "https://music.163.com"]) {
-                return "https://music.163.com/song/media/outer/url?id=\(song.songId).mp3"
-            }
-            return nil
+            // 探测失败也直接返回外链（部分 CDN 不支持 Range 探测，但实际可播）。
+            return outer
         case "kw":
             guard let data = await get(
                 "http://www.kuwo.cn/api/v1/www/music/playUrl?mid=\(song.songId)&type=music&httpsStatus=1",

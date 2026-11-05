@@ -488,12 +488,10 @@ struct PlayerHeadersTests {
         #expect(fallback["User-Agent"]?.contains("iPhone") == true)
     }
 
-    @Test("本地缓存文件名按 URL 稳定派生：相同 URL 一致、不同 URL 互异、长度固定")
-    func cacheFileNameStable() {
-        let a = AudioPlayer.stableName("https://m7.music.126.net/x.mp3")
-        let b = AudioPlayer.stableName("https://m7.music.126.net/x.mp3")
-        #expect(a == b)
-        #expect(a.count == 16)
-        #expect(AudioPlayer.stableName("https://other.cdn/1.mp3") != a)
+    @Test("播放器对非法音频地址应标记 error 而非崩溃")
+    func audioPlayerRejectsInvalidURL() {
+        let player = AudioPlayer()
+        player.play(url: "not a url")
+        #expect(player.error != nil)
     }
 }
