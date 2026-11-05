@@ -438,16 +438,6 @@ struct MusicSourceRuntimeTests {
         #expect(SourceRuntime.requestBody(from: nil, headers: &h4) == nil)
     }
 
-    /// 回归：AVPlayer 先用 bytes=0-1 探测，CDN 返回 206 + Content-Range，
-    /// 必须从「/」后解析真实总字节数，否则 contentLength 被设成 2 导致「放不出声音 / 进度不动」。
-    @Test("解析 206 Content-Range 的真实总字节数")
-    func parseContentRangeTotal() {
-        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 0-1/2595151") == 2595151)
-        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 100-200/999") == 999)
-        // 缺省 / 畸形 → nil（回退到 expectedContentLength）。
-        #expect(StreamingAssetLoader.parseContentRangeTotal("bytes 0-1") == nil)
-        #expect(StreamingAssetLoader.parseContentRangeTotal("garbage") == nil)
-    }
 }
 
 @Suite("媒体库（最近播放 / 收藏）")
@@ -498,12 +488,12 @@ struct PlayerHeadersTests {
         #expect(fallback["User-Agent"]?.contains("iPhone") == true)
     }
 
-    @Test("音频直链改写成自定义 scheme 以触发流加载器注入请求头")
-    func assetSchemeRewrite() {
-        let url = URL(string: "https://m7.music.126.net/x.mp3")!
-        let wrapped = StreamingAssetLoader.makeAsset(url: url, headers: ["Referer": "https://music.163.com"])
-        #expect(wrapped.asset.url.scheme == StreamingAssetLoader.scheme)
-        #expect(wrapped.asset.url.absoluteString.contains("m7.music.126.net"))
-        #expect(wrapped.loader.headers["Referer"] == "https://music.163.com")
+    @Test("本地缓存文件名按 URL 稳定派生：相同 URL 一致、不同 URL 互异、长度固定")
+    func cacheFileNameStable() {
+        let a = AudioPlayer.stableName("https://m7.music.126.net/x.mp3")
+        let b = AudioPlayer.stableName("https://m7.music.126.net/x.mp3")
+        #expect(a == b)
+        #expect(a.count == 16)
+        #expect(AudioPlayer.stableName("https://other.cdn/1.mp3") != a)
     }
 }

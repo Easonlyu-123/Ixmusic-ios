@@ -26,33 +26,52 @@ struct NowPlayingView: View {
     }
 
     var body: some View {
-        ZStack {
-            blurredBackdrop
+        GeometryReader { geo in
+            // 封面固定为正方形，且不超过「屏宽 - 边距」与「屏高约 46%」二者较小值，
+            // 保证任何机型下都不会把整页撑变形 / 溢出裁切。
+            let artSize = max(0, min(geo.size.width - 48, geo.size.height * 0.46))
+            ZStack {
+                blurredBackdrop
 
-            VStack(spacing: 0) {
-                topBar
-                Spacer(minLength: 8)
-                titleBlock
-                if showLyrics {
-                    fullLyricPage
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .move(edge: .trailing)),
-                            removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))))
-                } else {
-                    artwork
-                        .transition(.asymmetric(
-                            insertion: .opacity.combined(with: .scale(scale: 0.95)),
-                            removal: .opacity.combined(with: .scale(scale: 1.06, anchor: .top))))
-                    progressBlock
-                    controls
+                VStack(spacing: 0) {
+                    topBar
+                    Spacer(minLength: 8)
+                    titleBlock
+                    if showLyrics {
+                        fullLyricPage
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .move(edge: .trailing)),
+                                removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))))
+                    } else {
+                        artwork
+                            .frame(width: artSize, height: artSize)
+                            .transition(.asymmetric(
+                                insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                                removal: .opacity.combined(with: .scale(scale: 1.06, anchor: .top))))
+                        progressBlock
+                        controls
+                    }
                 }
+                .padding(.horizontal, 24)
+                .padding(.top, geo.safeAreaInsets.top)
+                .padding(.bottom, geo.safeAreaInsets.bottom)
             }
-            .padding(.horizontal, 24)
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
         .tint(store.accentColor)
-        // 钉死整页尺寸，避免专辑图加载后把页面「撑大」导致溢出裁切。
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .ignoresSafeArea()
         .task { await loadLyric() }
+        // 下载音频期间的加载态（本地播放前先下完，避免「点开就放」的错觉）。
+        .overlay(alignment: .center) {
+            if store.player.isLoading {
+                ProgressView("音频加载中…")
+                    .progressViewStyle(CircularProgressViewStyle(tint: .white))
+                    .padding(24)
+                    .background(.ultraThinMaterial, in: RoundedRectangle(cornerRadius: 16))
+                    .foregroundStyle(.white)
+            }
+        }
         .alert("播放失败", isPresented: Binding(
             get: { store.playbackNotice != nil },
             set: { if !$0 { store.playbackNotice = nil } }
