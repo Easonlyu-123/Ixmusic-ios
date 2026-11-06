@@ -28,7 +28,8 @@ struct NowPlayingView: View {
     var body: some View {
         GeometryReader { geo in
             // 封面固定为正方形，且不超过「屏宽 - 边距」与「屏高约 46%」二者较小值。
-            // 用 geo.size 计算：GeometryReader 贪婪占满，尺寸稳定，不会因专辑图加载而触发重算导致整页变形。
+            // GeometryReader 默认尊重安全区，geo.size 已是「去状态栏/底部条」后的可用尺寸，
+            // 不会因专辑图加载而把整页撑变形。
             let artSize = max(0, min(geo.size.width - 48, geo.size.height * 0.46))
             ZStack {
                 blurredBackdrop
@@ -54,16 +55,14 @@ struct NowPlayingView: View {
                     }
                 }
                 .padding(.horizontal, 24)
-                // 关键：padding 用 geo.safeAreaInsets（此时非零），让顶栏落到状态栏下方、可点击。
-                .padding(.top, geo.safeAreaInsets.top)
-                .padding(.bottom, geo.safeAreaInsets.bottom)
+                // 内容尊重安全区：顶栏自然落在状态栏下方、可点击；仅加少量留白。
+                .padding(.top, 8)
+                .padding(.bottom, 8)
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
         }
-        // 关键修复：.ignoresSafeArea() 必须放在 GeometryReader 的「外层容器」上，
-        // 否则直接加在 GeometryReader 会让 geo.safeAreaInsets 变成 0，顶栏被状态栏遮挡。
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
-        .ignoresSafeArea()
+        // 注意：.ignoresSafeArea() 只加在「背景」上（见 blurredBackdrop），让背景铺满整屏；
+        // 内容层保持尊重安全区，顶栏绝不会被状态栏遮挡。
         .tint(store.accentColor)
         .task { await loadLyric() }
         // 流式起播缓冲 / 回退下载期间的加载态。
@@ -107,6 +106,7 @@ struct NowPlayingView: View {
             }
             Color.black.opacity(showLyrics ? 0.35 : 0.1)
         }
+        // 仅背景忽略安全区：铺满整屏（含状态栏/底部区域），但内容仍受安全区约束。
         .ignoresSafeArea()
         .clipped()
         .animation(.easeInOut(duration: 0.45), value: showLyrics)

@@ -217,10 +217,10 @@ final class AppStore: ObservableObject {
                 playlist.append(song)
             }
             isPlaying = true
-            // 数秒后若 AVPlayer 仍然报错（如 403 / 直链失效），把原因透传给 UI。
+            // 数秒后若 AVPlayer 仍报错且不在加载（流式失败且本地回退也失败），把原因透传给 UI。
             Task { @MainActor in
                 try? await Task.sleep(nanoseconds: 4_000_000_000)
-                if let err = self.player.error, !err.isEmpty {
+                if let err = self.player.error, !err.isEmpty, !self.player.isLoading {
                     self.playbackNotice = "「\(song.displayTitle)」播放失败：\(err)"
                 }
             }
