@@ -340,15 +340,16 @@ final class SourceRuntime {
             // 脚本内部用 info.source（即下面传入的 platform）去 apis[source] 取对应平台逻辑。
             // 不能传音源对象自己的 platform 字段（导入时默认是 "custom"，会导致 apis["custom"] 未定义）。
             let platform = song.source
-            // 按脚本 inited 声明选动作；未声明则按常见顺序尝试。超时给足（取链常含网络往返）。
+            // 按脚本 inited 声明选动作；未声明则按常见顺序尝试。
+            // 超时收紧：hang 住的音源要尽快放弃并落到内置兜底，避免「一直加载/很慢」。
             let candidates: [(String, TimeInterval)]
             switch declaredUrlActions(entry) {
             case let actions? where actions.contains("musicUrl") && !actions.contains("music/url"):
-                candidates = [("musicUrl", 12)]
+                candidates = [("musicUrl", 6)]
             case let actions? where actions.contains("music/url") && !actions.contains("musicUrl"):
-                candidates = [("music/url", 12)]
+                candidates = [("music/url", 6)]
             default:
-                candidates = [("musicUrl", 10), ("music/url", 10), ("getMusicUrl", 6)]
+                candidates = [("musicUrl", 6), ("music/url", 4)]
             }
             for (action, t) in candidates {
                 if let r = invokeAction(entry, ctx, platform: platform,
@@ -435,8 +436,9 @@ final class SourceRuntime {
             return nil
         }
         // 方式一：处理器返回 Promise / thenable（洛雪官方主路径）。
+        // 传入本动作的超时预算，Promise hang 住时按预算放弃，绝不无限等待。
         if let result, result.forProperty("then")?.isObject == true {
-            return awaitPromise(result)
+            return awaitPromise(result, timeout: timeout)
         }
         // 方式二：处理器直接返回非 Promise 值（部分老脚本；官方契约 musicUrl/pic 直接返回 URL 字符串）。
         if let result, !result.isUndefined, !result.isNull {
@@ -547,25 +549,37 @@ final class SourceRuntime {
 
     // MARK: - Promise 等待（主线程 RunLoop 泵动）
 
-    private func awaitPromise(_ promise: JSValue?) -> Any? {
+    /// 等待 Promise settle，**带硬超时**：脚本既不 resolve 也不 reject 时按预算放弃，
+    /// 避免在主线程无限泵动导致「一直加载、点不开」。缺省 8s。
+    private func awaitPromise(_ promise: JSValue?, timeout: TimeInterval = 8) -> Any? {
         guard let promise = promise, promise.forProperty("then")?.isObject == true else {
             return promise?.toObject()
         }
         var result: Any?
+        var settled = false
         let group = DispatchGroup()
         group.enter()
         let onFulfilled: @convention(block) (JSValue) -> Void = { value in
+            guard !settled else { return }
+            settled = true
             result = value.toObject()
             group.leave()
         }
         let onRejected: @convention(block) (JSValue) -> Void = { [weak self] value in
+            guard !settled else { return }
+            settled = true
             let reason = value.toString() ?? "unknown"
             NSLog("LuoxueMusic JS promise rejected: %@", reason)
             self?.lastActionError = "脚本 Promise 拒绝: \(reason)"
             group.leave()
         }
         promise.invokeMethod("then", withArguments: [onFulfilled, onRejected])
-        while group.wait(timeout: .now() + 0.1) != .success {
+        let deadline = Date().addingTimeInterval(max(0.5, timeout))
+        while group.wait(timeout: .now() + 0.05) != .success {
+            if Date() >= deadline {
+                lastActionError = "音源响应超时（\(Int(timeout))s 未返回）"
+                return nil
+            }
             RunLoop.current.run(mode: .default, before: Date().addingTimeInterval(0.05))
         }
         return result

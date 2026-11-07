@@ -1,4 +1,5 @@
 import SwiftUI
+import UIKit
 
 /// Apple Music 风格的全屏播放页：大封面 / 整页歌词两态切换（点击封面进入歌词），
 /// 真实专辑封面、细进度条、上一首/播放/下一首、收藏。
@@ -25,47 +26,72 @@ struct NowPlayingView: View {
         return [top, bottom]
     }
 
-    var body: some View {
-        GeometryReader { geo in
-            // 封面固定为正方形，且不超过「屏宽 - 边距」与「屏高约 46%」二者较小值。
-            // GeometryReader 默认尊重安全区，geo.size 已是「去状态栏/底部条」后的可用尺寸，
-            // 不会因专辑图加载而把整页撑变形。
-            let artSize = max(0, min(geo.size.width - 48, geo.size.height * 0.46))
-            ZStack {
-                blurredBackdrop
+    /// 从 keyWindow 读取的**确定性**屏幕尺寸与安全区（不受 ignoresSafeArea 归零影响）。
+    /// 用它给内容留白：顶栏按钮落在状态栏下方、底部避开 home indicator；
+    /// 而背景单独铺满整屏，让这两块区域是彩色而非系统默认白底。
+    private var metrics: (size: CGSize, top: CGFloat, bottom: CGFloat) {
+        let window = UIApplication.shared.connectedScenes
+            .compactMap { $0 as? UIWindowScene }
+            .flatMap { $0.windows }
+            .first { $0.isKeyWindow }
+        let size = window?.bounds.size ?? UIScreen.main.bounds.size
+        return (size, window?.safeAreaInsets.top ?? 0, window?.safeAreaInsets.bottom ?? 0)
+    }
+    private var screenSize: CGSize { metrics.size }
+    private var topInset: CGFloat { metrics.top }
+    private var bottomInset: CGFloat { metrics.bottom }
 
-                VStack(spacing: 0) {
-                    topBar
-                    Spacer(minLength: 8)
-                    titleBlock
-                    if showLyrics {
-                        fullLyricPage
-                            .frame(maxWidth: .infinity, maxHeight: .infinity)
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .move(edge: .trailing)),
-                                removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))))
-                    } else {
-                        artwork
-                            .frame(width: artSize, height: artSize)
-                            .transition(.asymmetric(
-                                insertion: .opacity.combined(with: .scale(scale: 0.95)),
-                                removal: .opacity.combined(with: .scale(scale: 1.06, anchor: .top))))
-                        progressBlock
-                        controls
-                    }
+    /// 封面固定正方形：完全由屏幕尺寸确定性算出，不随图片加载而变化。
+    private var artSize: CGFloat {
+        let m = metrics
+        let usableHeight = m.size.height - m.top - m.bottom
+        return max(0, min(m.size.width - 48, usableHeight * 0.44))
+    }
+
+    var body: some View {
+        ZStack {
+            // 背景单独铺满整屏（含状态栏/底部区域）：让顶/底不是系统默认白底，而是彩色。
+            blurredBackdrop
+
+            VStack(spacing: 0) {
+                topBar
+                Spacer(minLength: 8)
+                titleBlock
+                if showLyrics {
+                    fullLyricPage
+                        .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.92, anchor: .top)).combined(with: .move(edge: .trailing)),
+                            removal: .opacity.combined(with: .scale(scale: 0.95, anchor: .top))))
+                } else {
+                    artwork
+                        .frame(width: artSize, height: artSize)
+                        .transition(.asymmetric(
+                            insertion: .opacity.combined(with: .scale(scale: 0.95)),
+                            removal: .opacity.combined(with: .scale(scale: 1.06, anchor: .top))))
+                    progressBlock
+                    controls
                 }
-                .padding(.horizontal, 24)
-                // 内容尊重安全区：顶栏自然落在状态栏下方、可点击；仅加少量留白。
-                .padding(.top, 8)
-                .padding(.bottom, 8)
             }
-            .frame(maxWidth: .infinity, maxHeight: .infinity)
+            .padding(.horizontal, 24)
+            // 用确定性安全区数值留白：顶栏落在状态栏下方（可点）、底部避开 home 条；
+            // 这两块区域本身由背景着色，可放按键，绝不是白色空带。
+            .padding(.top, topInset + 8)
+            .padding(.bottom, bottomInset + 8)
+            // 显式铺满：顶栏贴顶、控件贴底，不按理想尺寸居中。
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
         }
-        // 注意：.ignoresSafeArea() 只加在「背景」上（见 blurredBackdrop），让背景铺满整屏；
-        // 内容层保持尊重安全区，顶栏绝不会被状态栏遮挡。
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        // 整页彩色兜底背景 + 忽略安全区：fullScreenCover 也不会露出系统白底。
+        .background(
+            LinearGradient(colors: [artColors[1].opacity(0.55), Color(red: 0.05, green: 0.05, blue: 0.08)],
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea(.all)
+        )
+        .ignoresSafeArea(.all)
         .tint(store.accentColor)
         .task { await loadLyric() }
-        // 流式起播缓冲 / 回退下载期间的加载态。
+        // 取链 / 下载音频期间的加载态。
         .overlay(alignment: .center) {
             if store.player.isLoading {
                 ProgressView("音频加载中…")
@@ -98,17 +124,18 @@ struct NowPlayingView: View {
                         image.resizable().scaledToFill()
                     }
                 }
-                // 约束尺寸，并裁剪掉放大后的溢出部分，避免专辑图加载后把整页横向撑大。
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-                .scaleEffect(1.25)
+                // 关键：钉死与屏幕一致的尺寸 + 裁剪，图片固有尺寸再大也不改变布局，
+                // 不会把整页左右/上下撑大。不再用 scaleEffect（会在部分机型放大溢出）。
+                .frame(width: screenSize.width, height: screenSize.height)
+                .clipped()
                 .blur(radius: 64)
                 .opacity(showLyrics ? 0.5 : 0.32)
             }
             Color.black.opacity(showLyrics ? 0.35 : 0.1)
         }
-        // 仅背景忽略安全区：铺满整屏（含状态栏/底部区域），但内容仍受安全区约束。
-        .ignoresSafeArea()
+        .frame(width: screenSize.width, height: screenSize.height)
         .clipped()
+        .ignoresSafeArea(.all)
         .animation(.easeInOut(duration: 0.45), value: showLyrics)
     }
 
@@ -154,6 +181,8 @@ struct NowPlayingView: View {
     }
 
     /// 专辑封面（真实封面 + 占位渐变兜底），点击进入整页歌词。
+    /// 尺寸完全由调用处的 `.frame(width:artSize,height:artSize)` 钉死，
+    /// 内部图片也钉死并裁切，绝不因真实封面的固有尺寸把宽度撑大。
     private var artwork: some View {
         ZStack {
             RoundedRectangle(cornerRadius: 12)
@@ -164,18 +193,17 @@ struct NowPlayingView: View {
                     case .success(let image):
                         image.resizable().scaledToFill()
                     default:
-                        Image(systemName: "music.note")
-                            .font(.system(size: 72, weight: .light))
-                            .foregroundStyle(.white.opacity(0.85))
+                        placeholderGlyph
                     }
                 }
+                // 钉死为正方形（与外层一致），裁剪掉填充溢出，图片加载不改变布局。
+                .frame(width: artSize, height: artSize)
+                .clipped()
             } else {
-                Image(systemName: "music.note")
-                    .font(.system(size: 72, weight: .light))
-                    .foregroundStyle(.white.opacity(0.85))
+                placeholderGlyph
             }
         }
-        .aspectRatio(1, contentMode: .fit)
+        .frame(width: artSize, height: artSize)
         .clipShape(RoundedRectangle(cornerRadius: 12))
         .shadow(color: artColors[1].opacity(0.6), radius: 28, x: 0, y: 14)
         .contentShape(RoundedRectangle(cornerRadius: 12))
@@ -194,6 +222,12 @@ struct NowPlayingView: View {
                 .foregroundStyle(.primary)
                 .padding(10)
         }
+    }
+
+    private var placeholderGlyph: some View {
+        Image(systemName: "music.note")
+            .font(.system(size: 72, weight: .light))
+            .foregroundStyle(.white.opacity(0.85))
     }
 
     private var titleBlock: some View {

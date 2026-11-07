@@ -177,17 +177,44 @@ final class AppStore: ObservableObject {
 
     // MARK: - 播放
 
-    /// 播放取链：平台对应音源 → 其他所有已启用音源（逐个尝试，洛雪行为：音源可跨平台取链）
-    /// → 内置平台直链兜底（保证非 VIP 的内置平台歌曲始终可放；VIP/版权歌曲仍需音源）。
-    /// 全部失败时把最后一个错误透传到弹窗，方便定位。
+    /// 每次点歌的请求序号：慢取链的旧结果不得覆盖用户后点的歌。
+    private var playToken = 0
+
+    /// 播放取链：平台对应音源 → 其余已启用音源（限量，洛雪行为：音源可跨平台取链）
+    /// → 内置平台直链兜底。全部失败时把最后一个错误透传到弹窗，方便定位。
+    ///
+    /// 关键：**点歌瞬间就更新 currentSong 并置加载态**，UI 立即有反馈，
+    /// 不再出现「点了歌半天不打开 / 一直转圈」的观感；取链在后台继续。
     func play(_ song: Song) {
+        // 立即反馈（不等取链）：让底部条 / 播放页马上出现并显示加载态。
+        playToken += 1
+        let token = playToken
+        currentSong = song
+        isPlaying = false
+        playbackNotice = nil
+        player.beginLoading()
+        addRecent(song)
+        if !playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
+            playlist.append(song)
+        }
+        // 播放失败时把具体原因弹给用户（下载失败 / 403 / 无可播音源）。
+        player.onFailure = { [weak self] msg in
+            let notice = "「\(song.displayTitle)」播放失败：\(msg)"
+            Task { @MainActor in
+                self?.playbackNotice = notice
+            }
+        }
+
         Task {
             var url: String?
             var lastError: String?
             var tried: [String] = []
 
-            for src in orderedCandidateSources(for: song) {
+            // 候选音源限量，避免导入很多音源时逐个慢取链叠加到几十秒。
+            let candidates = Array(orderedCandidateSources(for: song).prefix(4))
+            for src in candidates {
                 let (u, e) = await runtime.getUrlWithReport(source: src, song: song)
+                guard token == self.playToken else { return } // 用户已改点别的歌
                 if let u {
                     url = u
                     break
@@ -196,34 +223,24 @@ final class AppStore: ObservableObject {
                 tried.append(src.name)
             }
 
-            if url == nil {
+            if url == nil, token == self.playToken {
                 url = await BuiltInPlatforms.playUrl(platform: song.source, song: song)
             }
+            guard token == self.playToken else { return }
 
             guard let url else {
                 let detail = lastError.map { "\n（音源返回：\($0)）" } ?? ""
                 let names = tried.isEmpty ? "" : "\n已尝试音源：\(tried.joined(separator: "、"))"
                 let builtInHint = "（内置平台直链兜底也不可用）"
-                playbackNotice = "「\(song.displayTitle)」暂无法播放\(detail)\(names)\n\(builtInHint)该歌曲可能是 VIP/版权歌曲，需可用音源支持。"
+                self.playbackNotice = "「\(song.displayTitle)」暂无法播放\(detail)\(names)\n\(builtInHint)该歌曲可能是 VIP/版权歌曲，需可用音源支持。"
+                self.player.isLoading = false
                 return
             }
-            playbackNotice = nil
-            // 各平台 CDN 直链需要对应 Referer 才能播放（AVPlayer 默认不带）。
+            self.playbackNotice = nil
+            // 各平台 CDN 直链需要对应 Referer/UA 才能下载（自定义音源直链尤甚），下载时带上。
             let headers = Self.audioHeaders(for: song.source, url: url)
-            player.play(url: url, headers: headers)
-            currentSong = song
-            addRecent(song)
-            if !playlist.contains(where: { $0.source == song.source && $0.songId == song.songId }) {
-                playlist.append(song)
-            }
-            isPlaying = true
-            // 数秒后若 AVPlayer 仍报错且不在加载（流式失败且本地回退也失败），把原因透传给 UI。
-            Task { @MainActor in
-                try? await Task.sleep(nanoseconds: 4_000_000_000)
-                if let err = self.player.error, !err.isEmpty, !self.player.isLoading {
-                    self.playbackNotice = "「\(song.displayTitle)」播放失败：\(err)"
-                }
-            }
+            self.player.play(url: url, headers: headers)
+            self.isPlaying = true
         }
     }
 

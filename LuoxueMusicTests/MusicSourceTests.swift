@@ -494,4 +494,14 @@ struct PlayerHeadersTests {
         player.play(url: "not a url")
         #expect(player.error != nil)
     }
+
+    /// 回归：取链阶段必须「零网络往返」直接返回外链，避免 v1.3.2 那种
+    /// 用 GET 把整首歌下载一遍再返回、导致点歌后一直加载很久的问题。
+    @Test("内置 wy 取链立即返回外链、不触发整曲下载")
+    func builtInWyReturnsOuterURLImmediately() async {
+        let song = Song(source: "wy", songId: "27552342", title: "x", artist: "y",
+                        album: "z", duration: 0, picUrl: "", lrcUrl: "")
+        let url = await BuiltInPlatforms.playUrl(platform: "wy", song: song)
+        #expect(url == "https://music.163.com/song/media/outer/url?id=27552342.mp3")
+    }
 }

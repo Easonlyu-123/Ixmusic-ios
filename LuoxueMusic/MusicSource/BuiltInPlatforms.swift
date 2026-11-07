@@ -117,21 +117,11 @@ enum BuiltInPlatforms {
     static func playUrl(platform: String, song: Song) async -> String? {
         switch platform {
         case "wy":
-            // 免费外链最稳：无需 Cookie，服务端 302 跳转到音频 CDN 直链（实测可下到完整音频）。
-            // 官方 enhance/player/url 接口现已对无 Cookie 请求返回验证拦截（code -462），仅作兜底。
-            let outer = "https://music.163.com/song/media/outer/url?id=\(song.songId).mp3"
-            // 把外链解析为最终 CDN 直链并升级 https：播放器直接命中 CDN，无需跟随 302、也不碰明文 http。
-            let resolved = await resolvePlayableURL(outer)
-            if await probeAudio(resolved, headers: ["Referer": "https://music.163.com"]) {
-                return resolved
-            }
-            if let data = await postForm(
-                "https://music.163.com/api/song/enhance/player/url",
-                form: ["ids": "[\(song.songId)]", "br": "320000"],
-                headers: ["Referer": "https://music.163.com"]
-            ), let url = parseNeteaseUrl(data) { return url }
-            // 探测失败也直接返回解析后的外链（部分 CDN 不支持 Range 探测，但实际可播）。
-            return resolved
+            // 免费外链：无需 Cookie，服务端 302 跳到音频 CDN 直链（实测可下到完整音频）。
+            // 取链阶段**零网络往返**直接返回 URL——播放层会带 Referer 下载、自动跟随 302、
+            // 并把 404/版权提示页判为「无可播放音源」。不再在取链时整曲下载或探测，避免点歌后久等。
+            // 官方 enhance/player/url 接口对无 Cookie 请求返回验证拦截（code -462），已不可用。
+            return "https://music.163.com/song/media/outer/url?id=\(song.songId).mp3"
         case "kw":
             guard let data = await get(
                 "http://www.kuwo.cn/api/v1/www/music/playUrl?mid=\(song.songId)&type=music&httpsStatus=1",
@@ -184,43 +174,6 @@ enum BuiltInPlatforms {
         // sip 是 CDN 前缀（可能多个，取第一个非空），purl 是文件路径。
         let prefix = (inner["sip"] as? [String])?.first(where: { !$0.isEmpty }) ?? ""
         return prefix.hasSuffix("/") || purl.hasPrefix("http") ? prefix + purl : prefix + "/" + purl
-    }
-
-    /// 把「会 302 跳转的短链（如网易云外链）」解析为最终 CDN 直链，并升级为 https。
-    /// 这样播放器直接命中 CDN，无需在播放层处理 302 跳转与明文 http（ATS/重定向都更稳）。
-    static func resolvePlayableURL(_ url: String) async -> String {
-        guard let u = URL(string: url) else { return url }
-        var req = URLRequest(url: u, timeoutInterval: 12)
-        req.httpMethod = "GET"
-        req.setValue("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15",
-                     forHTTPHeaderField: "User-Agent")
-        do {
-            let (_, resp) = try await URLSession.shared.data(for: req)
-            if let http = resp as? HTTPURLResponse, let final = http.url?.absoluteString {
-                return upgradeHTTPS(final)
-            }
-        } catch {
-            // 解析失败（如网络抖动）：退回原链，交给播放器自行跟随重定向。
-        }
-        return upgradeHTTPS(url)
-    }
-
-    /// 把明文 http 链接升级为 https（CDN 一般均支持，规避 ATS 对明文 http 的限制）。
-    static func upgradeHTTPS(_ url: String) -> String {
-        url.hasPrefix("http://") ? "https://" + String(url.dropFirst("http://".count)) : url
-    }
-
-    /// 探测一个 URL 是否真正返回音频（外链接口对不可播的歌回 404/HTML）。
-    static func probeAudio(_ url: String, headers: [String: String]) async -> Bool {
-        guard let u = URL(string: url) else { return false }
-        var req = URLRequest(url: u, timeoutInterval: 8)
-        req.setValue("bytes=0-1023", forHTTPHeaderField: "Range")
-        headers.forEach { req.setValue($1, forHTTPHeaderField: $0) }
-        guard let (data, resp) = try? await URLSession.shared.data(for: req),
-              let http = resp as? HTTPURLResponse,
-              (200...299).contains(http.statusCode) else { return false }
-        let type = (http.value(forHTTPHeaderField: "Content-Type") ?? "").lowercased()
-        return type.contains("audio") || type.contains("octet") || data.count > 512
     }
 
     static func parseNeteaseUrl(_ data: Data) -> String? {
